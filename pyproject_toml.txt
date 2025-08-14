@@ -1,0 +1,30 @@
+[project]
+name = "oraculus-bot"
+version = "1.0.0"
+description = "Bot de Zulip para competencias tipo Kaggle"
+authors = [
+    {name = "OraculusBot Team"}
+]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "zulip>=0.8.2",
+    "pandas>=1.3.0",
+    "numpy>=1.21.0",
+    "scikit-learn>=1.0.0",
+]
+
+[project.scripts]
+oraculus-bot = "oraculus_bot:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "black>=22.0.0",
+    "isort>=5.10.0",
+    "flake8>=4.0.0",
+]
