@@ -10,6 +10,7 @@ import sqlite3
 import hashlib
 import pandas as pd
 import numpy as np
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -22,87 +23,153 @@ from sklearn.metrics import confusion_matrix
 class OraculusBot:
     def __init__(self, config_path: str):
         self.config = self._load_config(config_path)
+        
+        # Configurar logging
+        self._setup_logging()
+        
+        self.logger.info(f"Iniciando OraculusBot con configuración: {config_path}")
+        
         self.client = zulip.Client(
             email=self.config['zulip']['email'],
             api_key=self.config['zulip']['api_key'],
             site=self.config['zulip']['site']
         )
         self.db_path = self.config['database']['path']
+        
+        self.logger.info(f"Conectado a Zulip como {self.config['zulip']['email']}")
+        self.logger.info(f"Base de datos: {self.db_path}")
+        
         self.init_database()
         self.load_master_data()
         
+    def _setup_logging(self):
+        """Configura el sistema de logging"""
+        # Crear directorio de logs si no existe
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        
+        # Configurar formato de log
+        log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        
+        # Configurar logger principal
+        self.logger = logging.getLogger('OraculusBot')
+        self.logger.setLevel(logging.INFO)
+        
+        # Handler para archivo
+        file_handler = logging.FileHandler(
+            log_dir / f"oraculus_bot_{datetime.now().strftime('%Y%m%d')}.log",
+            encoding='utf-8'
+        )
+        file_handler.setLevel(logging.INFO)
+        file_formatter = logging.Formatter(log_format)
+        file_handler.setFormatter(file_formatter)
+        
+        # Handler para consola
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        console_handler.setFormatter(console_formatter)
+        
+        # Agregar handlers
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+        
+        # Evitar duplicación de logs
+        self.logger.propagate = False
+        
     def _load_config(self, config_path: str) -> Dict:
         """Carga la configuración desde archivo JSON"""
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            # Como el logger aún no está configurado, usamos logging básico
+            logging.basicConfig(level=logging.ERROR)
+            logging.error(f"Error cargando configuración: {e}")
+            raise
     
     def init_database(self):
         """Inicializa la base de datos SQLite"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Tabla de envíos
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS submissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                user_email TEXT,
-                user_full_name TEXT,
-                submission_name TEXT,
-                timestamp DATETIME,
-                file_checksum TEXT,
-                file_path TEXT,
-                public_score REAL,
-                private_score REAL,
-                tp INTEGER,
-                tn INTEGER,
-                fp INTEGER,
-                fn INTEGER,
-                estimulos INTEGER,
-                threshold_category TEXT,
-                is_selected BOOLEAN DEFAULT FALSE
-            )
-        ''')
-        
-        # Tabla de badges
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_badges (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                badge_name TEXT,
-                earned_at DATETIME,
-                UNIQUE(user_id, badge_name)
-            )
-        ''')
-        
-        # Tabla de fake submissions
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS fake_submissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE,
-                public_score REAL,
-                threshold_category TEXT
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Tabla de envíos
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS submissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    user_email TEXT,
+                    user_full_name TEXT,
+                    submission_name TEXT,
+                    timestamp DATETIME,
+                    file_checksum TEXT,
+                    file_path TEXT,
+                    public_score REAL,
+                    private_score REAL,
+                    tp INTEGER,
+                    tn INTEGER,
+                    fp INTEGER,
+                    fn INTEGER,
+                    estimulos INTEGER,
+                    threshold_category TEXT,
+                    is_selected BOOLEAN DEFAULT FALSE
+                )
+            ''')
+            
+            # Tabla de badges
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_badges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    badge_name TEXT,
+                    earned_at DATETIME,
+                    UNIQUE(user_id, badge_name)
+                )
+            ''')
+            
+            # Tabla de fake submissions
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS fake_submissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE,
+                    public_score REAL,
+                    threshold_category TEXT
+                )
+            ''')
+            
+            conn.commit()
+            conn.close()
+            
+            self.logger.info("Base de datos inicializada correctamente")
+            
+        except Exception as e:
+            self.logger.error(f"Error inicializando base de datos: {e}")
+            raise
     
     def load_master_data(self):
         """Carga los datos maestros para calcular scores"""
-        master_path = self.config['master_data']['path']
-        self.master_df = pd.read_csv(master_path, header=None, names=['id', 'true_label'])
-        
-        # Split público/privado usando la semilla configurada
-        seed = self.config['master_data']['seed']
-        self.public_ids, self.private_ids = train_test_split(
-            self.master_df['id'].values,
-            test_size=0.7,
-            random_state=seed
-        )
-        
-        self.public_set = set(self.public_ids)
-        self.private_set = set(self.private_ids)
+        try:
+            master_path = self.config['master_data']['path']
+            self.master_df = pd.read_csv(master_path, header=None, names=['id', 'true_label'])
+            
+            # Split público/privado usando la semilla configurada
+            seed = self.config['master_data']['seed']
+            self.public_ids, self.private_ids = train_test_split(
+                self.master_df['id'].values,
+                test_size=0.7,
+                random_state=seed
+            )
+            
+            self.public_set = set(self.public_ids)
+            self.private_set = set(self.private_ids)
+            
+            self.logger.info(f"Datos maestros cargados: {len(self.master_df)} registros")
+            self.logger.info(f"Split - Público: {len(self.public_set)}, Privado: {len(self.private_set)}")
+            
+        except Exception as e:
+            self.logger.error(f"Error cargando datos maestros: {e}")
+            raise
     
     def calculate_scores(self, predictions_df: pd.DataFrame) -> Tuple[Dict, Dict]:
         """Calcula scores público y privado usando matriz de ganancias"""
@@ -228,39 +295,51 @@ class OraculusBot:
     
     def process_submit(self, message: Dict, is_teacher: bool = False) -> str:
         """Procesa comando submit"""
+        user_email = message['sender_email']
+        submission_name = ""
+        
         try:
+            self.logger.info(f"Procesando submit de {user_email} (profesor: {is_teacher})")
+            
             # Extraer nombre del envío
             parts = message['content'].strip().split(' ', 1)
             if len(parts) < 2:
                 return "❌ Formato incorrecto. Uso: `submit <nombre_envio>`"
             
             submission_name = parts[1].strip()
+            self.logger.info(f"Nombre del envío: {submission_name}")
             
             # Verificar archivo adjunto
             if not message.get('attachments'):
+                self.logger.warning(f"No hay archivo adjunto en envío de {user_email}")
                 return "❌ Debes adjuntar un archivo CSV"
             
             attachment = message['attachments'][0]
             if not attachment['name'].endswith('.csv'):
+                self.logger.warning(f"Archivo no CSV enviado por {user_email}: {attachment['name']}")
                 return "❌ El archivo debe ser un CSV"
             
             # Verificar fecha límite (solo para estudiantes)
             if not is_teacher:
                 deadline = datetime.fromisoformat(self.config['competition']['deadline'])
                 if datetime.now() > deadline:
+                    self.logger.warning(f"Envío fuera de fecha límite de {user_email}")
                     return "❌ La fecha límite para envíos ha expirado"
             
             # Descargar y validar archivo
+            self.logger.info(f"Descargando archivo: {attachment['name']}")
             file_content = self.client.get_file_content(attachment['url'])
             file_path = self._save_submission_file(message['sender_id'], submission_name, 
                                                  attachment['name'], file_content, is_teacher)
             
             # Calcular checksum
             checksum = hashlib.sha256(file_content).hexdigest()
+            self.logger.info(f"Archivo guardado: {file_path}, checksum: {checksum[:16]}...")
             
             # Leer y validar CSV
             df = pd.read_csv(file_path, header=None)
             if df.shape[1] != 2:
+                self.logger.warning(f"CSV con formato incorrecto de {user_email}: {df.shape[1]} columnas")
                 return "❌ El CSV debe tener exactamente 2 columnas (id, predicción)"
             
             # Validar IDs
@@ -270,6 +349,7 @@ class OraculusBot:
             if submitted_ids != expected_ids:
                 missing = expected_ids - submitted_ids
                 extra = submitted_ids - expected_ids
+                self.logger.warning(f"IDs incorrectos en envío de {user_email}: faltan {len(missing)}, sobran {len(extra)}")
                 msg = "❌ IDs incorrectos en el archivo:\n"
                 if missing:
                     msg += f"Faltan: {len(missing)} IDs\n"
@@ -280,12 +360,16 @@ class OraculusBot:
             # Validar valores binarios
             predictions = df.iloc[:, 1]
             if not all(pred in [0, 1] for pred in predictions):
+                self.logger.warning(f"Predicciones no binarias en envío de {user_email}")
                 return "❌ Las predicciones deben ser valores binarios (0 o 1)"
             
             # Calcular scores
+            self.logger.info(f"Calculando scores para {submission_name}")
             public_results, private_results = self.calculate_scores(df)
             threshold_category = self.get_threshold_category(public_results['score'])
             estimulos = int(predictions.sum())
+            
+            self.logger.info(f"Scores calculados - Público: {public_results['score']:.4f}, Privado: {private_results['score']:.4f}")
             
             user_info = {
                 'user_id': message['sender_id'],
@@ -295,6 +379,7 @@ class OraculusBot:
             
             if is_teacher:
                 # Para profesores: solo mostrar resultados
+                self.logger.info(f"Envío de profesor completado: {submission_name}")
                 response = f"📊 **Resultados para {submission_name}**\n\n"
                 response += f"🔓 **Público:** {public_results['score']:.4f}\n"
                 response += f"🔒 **Privado:** {private_results['score']:.4f}\n"
@@ -308,6 +393,8 @@ class OraculusBot:
                     public_results, private_results, estimulos, threshold_category
                 )
                 
+                self.logger.info(f"Envío guardado con ID: {submission_id}")
+                
                 # Contar envíos del usuario
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
@@ -319,6 +406,9 @@ class OraculusBot:
                 new_badges = self.check_and_award_badges(
                     message['sender_id'], submission_count, public_results['score']
                 )
+                
+                if new_badges:
+                    self.logger.info(f"Nuevos badges otorgados a {user_email}: {new_badges}")
                 
                 # Obtener configuración de respuesta por umbral
                 threshold_config = next(
@@ -341,6 +431,7 @@ class OraculusBot:
                 return response
                 
         except Exception as e:
+            self.logger.error(f"Error procesando envío '{submission_name}' de {user_email}: {e}")
             return f"❌ Error procesando envío: {str(e)}"
     
     def _save_submission_file(self, user_id: int, submission_name: str, 
@@ -692,45 +783,81 @@ class OraculusBot:
             return
         
         sender_email = message['sender_email']
+        
+        # IMPORTANTE: Ignorar mensajes del propio bot para evitar loops infinitos
+        if sender_email == self.config['zulip']['email']:
+            return
+            
         content = message['content'].strip().lower()
         is_teacher = self.is_teacher(sender_email)
         
-        # Procesar comandos
-        if content.startswith('submit '):
-            response = self.process_submit(message, is_teacher)
-        elif content == 'badges' and not is_teacher:
-            response = self.process_badges(message['sender_id'])
-        elif content == 'list submits' and not is_teacher:
-            response = self.process_list_submits(message['sender_id'])
-        elif content.startswith('select ') and not is_teacher:
-            response = self.process_select(message['sender_id'], message['content'])
-        elif content == 'duplicates' and is_teacher:
-            response = self.process_duplicates()
-        elif content == 'leaderboard full' and is_teacher:
-            response = self.process_leaderboard_full()
-        elif content == 'leaderboard public' and is_teacher:
-            response = self.process_leaderboard_public()
-        elif content.startswith('fake_submit ') and is_teacher:
-            response = self.process_fake_submit(message['content'])
-        elif content == 'help':
-            response = self.get_help_message(is_teacher)
-        else:
-            response = self.get_help_message(is_teacher)
+        self.logger.info(f"Mensaje recibido de {sender_email}: {content[:50]}{'...' if len(content) > 50 else ''}")
         
-        # Enviar respuesta
-        self.client.send_message({
-            'type': 'private',
-            'to': sender_email,
-            'content': response
-        })
+        # Procesar comandos
+        try:
+            if content.startswith('submit '):
+                response = self.process_submit(message, is_teacher)
+            elif content == 'badges' and not is_teacher:
+                self.logger.info(f"Comando badges de {sender_email}")
+                response = self.process_badges(message['sender_id'])
+            elif content == 'list submits' and not is_teacher:
+                self.logger.info(f"Comando list submits de {sender_email}")
+                response = self.process_list_submits(message['sender_id'])
+            elif content.startswith('select ') and not is_teacher:
+                self.logger.info(f"Comando select de {sender_email}")
+                response = self.process_select(message['sender_id'], message['content'])
+            elif content == 'duplicates' and is_teacher:
+                self.logger.info(f"Comando duplicates de profesor {sender_email}")
+                response = self.process_duplicates()
+            elif content == 'leaderboard full' and is_teacher:
+                self.logger.info(f"Comando leaderboard full de profesor {sender_email}")
+                response = self.process_leaderboard_full()
+            elif content == 'leaderboard public' and is_teacher:
+                self.logger.info(f"Comando leaderboard public de profesor {sender_email}")
+                response = self.process_leaderboard_public()
+            elif content.startswith('fake_submit ') and is_teacher:
+                self.logger.info(f"Comando fake_submit de profesor {sender_email}")
+                response = self.process_fake_submit(message['content'])
+            elif content == 'help':
+                self.logger.info(f"Comando help de {sender_email}")
+                response = self.get_help_message(is_teacher)
+            else:
+                self.logger.info(f"Comando no reconocido de {sender_email}: {content}")
+                response = self.get_help_message(is_teacher)
+            
+            # Enviar respuesta
+            self.client.send_message({
+                'type': 'private',
+                'to': sender_email,
+                'content': response
+            })
+            
+            self.logger.info(f"Respuesta enviada a {sender_email}")
+            
+        except Exception as e:
+            self.logger.error(f"Error manejando mensaje de {sender_email}: {e}")
+            error_response = "❌ Error interno del bot. El administrador ha sido notificado."
+            self.client.send_message({
+                'type': 'private',
+                'to': sender_email,
+                'content': error_response
+            })
     
     def run(self):
         """Ejecuta el bot"""
-        print(f"🤖 OraculusBot iniciado para la competencia: {self.config['competition']['name']}")
-        print(f"📅 Fecha límite: {self.config['competition']['deadline']}")
-        print("👂 Escuchando mensajes privados...")
+        self.logger.info(f"OraculusBot iniciado para la competencia: {self.config['competition']['name']}")
+        self.logger.info(f"Fecha límite: {self.config['competition']['deadline']}")
+        self.logger.info(f"Profesores configurados: {len(self.config['teachers'])}")
+        self.logger.info("Escuchando mensajes privados...")
+        self.logger.info("Logs guardándose en: logs/")
         
-        self.client.call_on_each_message(self.handle_message)
+        try:
+            self.client.call_on_each_message(self.handle_message)
+        except KeyboardInterrupt:
+            self.logger.info("Bot detenido por usuario")
+        except Exception as e:
+            self.logger.error(f"Error fatal en el bot: {e}")
+            raise
 
 
 def create_config_template():
@@ -821,7 +948,9 @@ def create_config_template():
     with open('config.json', 'w', encoding='utf-8') as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
     
-    print("✅ Archivo config.json creado")
+    # Configurar logging básico para esta función
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
+    logging.info("Archivo config.json creado exitosamente")
 
 
 def main():
@@ -831,22 +960,26 @@ def main():
     
     args = parser.parse_args()
     
+    # Configurar logging básico para main
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
+    
     if args.create_config:
         create_config_template()
         return
     
     if not os.path.exists(args.config):
-        print(f"❌ Archivo de configuración no encontrado: {args.config}")
-        print("💡 Usa --create-config para generar un ejemplo")
+        logging.error(f"Archivo de configuración no encontrado: {args.config}")
+        logging.info("Usa --create-config para generar un ejemplo")
         return
     
     try:
         bot = OraculusBot(args.config)
         bot.run()
     except KeyboardInterrupt:
-        print("\n👋 Bot detenido")
+        logging.info("Bot detenido por usuario")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logging.error(f"Error fatal: {e}")
+        raise
 
 
 if __name__ == "__main__":
