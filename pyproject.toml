@@ -24,7 +24,42 @@ build-backend = "hatchling.build"
 [tool.uv]
 dev-dependencies = [
     "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.10.0",
     "black>=22.0.0",
     "isort>=5.10.0",
     "flake8>=4.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = [".", "tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+    "--tb=short",
+    "--strict-markers",
+    "-ra"
+]
+markers = [
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "slow: marks tests as slow running",
+]
+
+[tool.coverage.run]
+source = ["oraculus_bot"]
+omit = [
+    "test_*.py",
+    "conftest.py",
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
 ]

@@ -109,6 +109,43 @@ def submit_to_oraculus(df, name, bot_email, user_email, api_key, site):
 #                   "you@email.com", "your-key", "https://org.zulipchat.com")
 ```
 
+## Tests
+
+El proyecto incluye una suite completa de tests unitarios y de integración.
+
+```bash
+# Ejecutar todos los tests
+uv run pytest -v
+
+# Tests con cobertura
+uv run pytest --cov=oraculus_bot --cov-report=html
+
+# Solo tests unitarios
+uv run pytest test_oraculus_bot.py -v
+
+# Solo tests de integración
+uv run pytest test_integration.py -v
+
+# Tests rápidos
+make test-fast
+
+# Todos los comandos disponibles
+make help
+```
+
+### Cobertura de Tests
+
+Los tests cubren:
+- ✅ Inicialización y configuración del bot
+- ✅ Cálculo de métricas y scores
+- ✅ Sistema de badges
+- ✅ Validación de envíos
+- ✅ Manejo de comandos
+- ✅ Sistema de leaderboards
+- ✅ Flujos completos de trabajo
+- ✅ Manejo de errores
+- ✅ Casos límite y edge cases
+
 ## Licencia
 
 MIT License - ver archivo LICENSE para detalles.

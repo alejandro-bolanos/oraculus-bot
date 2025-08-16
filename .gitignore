@@ -210,3 +210,5 @@ __marimo__/
 config.json
 *.db
 *.csv
+.DS_Store
+.vscode/settings.json
