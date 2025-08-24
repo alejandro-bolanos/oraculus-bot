@@ -25,9 +25,6 @@ cd oraculus-bot
 
 # Instalar con uv (recomendado)
 uv sync
-
-# O con pip tradicional
-pip install -e .
 ```
 
 ## ⚙️ Configuración
@@ -83,12 +80,9 @@ Edita `config.json` con tus credenciales de Zulip:
 
 ```bash
 # Ejecutar el bot
-uv run oraculus_bot.py
-# o usando make
-make run
-
-# Con configuración personalizada
 uv run oraculus_bot.py --config mi_config.json
+# o
+make run
 ```
 
 ## 📝 Comandos
@@ -125,21 +119,6 @@ Los estudiantes deben enviar un CSV con **exactamente 1 columna sin encabezado**
 7
 12
 15
-```
-
-**Antes (formato anterior):**
-```csv
-id,prediccion
-1,1
-2,0
-3,1
-4,0
-```
-
-**Ahora (formato nuevo):**
-```csv
-1
-3
 ```
 
 ### Cómo enviar desde Zulip
@@ -179,22 +158,6 @@ make test-watch
 # Verificación completa (lint + tests)
 make check
 ```
-
-### Comandos disponibles
-
-```bash
-make help  # Ver todos los comandos disponibles
-```
-
-### Cobertura de Tests
-
-Los tests cubren:
-- ✅ **Funcionalidad core**: Cálculo de scores, sistema de badges, validaciones
-- ✅ **Integración completa**: Flujos de trabajo estudiante/profesor
-- ✅ **Manejo de errores**: Casos límite, errores de red, datos malformados
-- ✅ **Rendimiento**: Escalabilidad con muchos envíos
-- ✅ **Integridad**: Consistencia de datos, detección de duplicados
-- ✅ **Configuración**: Validación de config, formatos inválidos
 
 ## 🎯 Sistema de Badges
 
@@ -315,25 +278,6 @@ oraculus-bot/
 └── submissions/            # Archivos de envíos
 ```
 
-## 📈 Ejemplo de Flujo
-
-### Estudiante típico:
-
-1. **Desarrollo del modelo** en Jupyter/Python
-2. **Generar predicciones**: Lista de IDs positivos
-3. **Submit via Zulip**: `submit mi_modelo_v1` + adjuntar CSV
-4. **Ver resultado**: Score público + badges ganados
-5. **Iterar**: Mejorar modelo, enviar nueva versión
-6. **Seleccionar final**: `select <id>` del mejor modelo
-
-### Profesor supervisando:
-
-1. **Monitor de envíos**: Ver `duplicates` regularmente
-2. **Baseline models**: `submit baseline` con resultados completos
-3. **Leaderboards**: `leaderboard public` para estudiantes
-4. **Análisis final**: `leaderboard full` con scores privados
-5. **Fake entries**: Agregar referencias con `fake_submit add`
-
 ## 🐳 Docker
 
 ```bash
@@ -344,63 +288,7 @@ make docker-build
 make docker-run
 ```
 
-## 🤝 Contribuir
-
-1. Fork del repositorio
-2. Crear branch: `git checkout -b feature/nueva-funcionalidad`
-3. Tests: `make test`
-4. Commit: `git commit -m "feat: nueva funcionalidad"`
-5. Push: `git push origin feature/nueva-funcionalidad`  
-6. Pull Request
-
-### Estándares de código
-
-- **Formatting**: Black + isort
-- **Linting**: flake8 + mypy
-- **Testing**: pytest con >80% cobertura
-- **Commits**: Conventional commits
-
-## 🐛 Troubleshooting
-
-### Errores comunes
-
-**"Error descargando archivo"**
-- Verificar que el archivo CSV esté correctamente adjunto
-- Comprobar permisos del bot en Zulip
-
-**"IDs inválidos encontrados"**  
-- Los IDs en tu CSV deben existir exactamente en el dataset maestro
-- Verificar que no haya espacios o caracteres extraños
-
-**"El archivo debe ser un CSV"**
-- Asegurar que el archivo tenga extensión `.csv`
-- Verificar que el contenido sea CSV válido
-
-**"exactamente 1 columna"**
-- El CSV debe tener solo los IDs positivos, sin encabezados
-- Una fila por ID, sin columnas adicionales
-
-### Logs
-
-```bash
-# Ver logs en tiempo real
-tail -f logs/oraculus_bot_$(date +%Y%m%d).log
-
-# Buscar errores específicos
-grep -i error logs/oraculus_bot_*.log
-```
-
 ## 📜 Licencia
 
 MIT License - ver archivo [LICENSE](LICENSE) para detalles.
 
-## 🙏 Reconocimientos
-
-- **Zulip**: Plataforma de chat
-- **scikit-learn**: Métricas de ML
-- **pandas**: Manipulación de datos
-- **pytest**: Framework de testing
-
----
-
-**¿Preguntas?** Abre un [issue](https://github.com/your-org/oraculus-bot/issues) o contacta al equipo de desarrollo.

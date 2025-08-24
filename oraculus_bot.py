@@ -13,14 +13,11 @@ import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Tuple, Optional, Set
 
 import pandas as pd
 import requests
 import zulip
 from sklearn.metrics import confusion_matrix
-from sklearn.model_selection import train_test_split
-
 
 
 # Configurar adaptadores de datetime para SQLite (Python 3.12+)
@@ -86,9 +83,7 @@ class OraculusBot:
         # Handler para consola
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
-        console_formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(message)s"
-        )
+        console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         console_handler.setFormatter(console_formatter)
 
         # Agregar handlers
@@ -98,10 +93,10 @@ class OraculusBot:
         # Evitar duplicación de logs
         self.logger.propagate = False
 
-    def _load_config(self, config_path: str) -> Dict:
+    def _load_config(self, config_path: str) -> dict:
         """Carga la configuración desde archivo JSON"""
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             # Como el logger aún no está configurado, usamos logging básico
@@ -183,7 +178,7 @@ class OraculusBot:
         try:
             master_path = self.config["master_data"]["path"]
             self.master_df = pd.read_csv(master_path)
-            
+
             # Validar columnas requeridas
             expected_cols = ["id", "clase_binaria", "dataset"]
             if not all(col in self.master_df.columns for col in expected_cols):
@@ -192,15 +187,15 @@ class OraculusBot:
             # Crear conjuntos público y privado
             public_mask = self.master_df["dataset"] == "public"
             private_mask = self.master_df["dataset"] == "private"
-            
+
             self.public_df = self.master_df[public_mask].copy()
             self.private_df = self.master_df[private_mask].copy()
-            
+
             # Crear conjuntos de IDs para validación
             self.public_ids = set(self.public_df["id"])
             self.private_ids = set(self.private_df["id"])
             self.all_ids = set(self.master_df["id"])
-            
+
             # Obtener IDs positivos (clase_binaria = 1) para validar submissions
             self.positive_ids = set(self.master_df[self.master_df["clase_binaria"] == 1]["id"])
 
@@ -212,7 +207,7 @@ class OraculusBot:
             self.logger.error(f"Error cargando datos maestros: {e}")
             raise
 
-    def calculate_scores(self, predicted_positive_ids: Set[int]) -> Tuple[Dict, Dict]:
+    def calculate_scores(self, predicted_positive_ids: set[int]) -> tuple[dict, dict]:
         """Calcula scores público y privado usando matriz de ganancias"""
         gain_matrix = self.config["gain_matrix"]
 
@@ -220,14 +215,15 @@ class OraculusBot:
             """Calcula métricas para un dataset específico"""
             if len(dataset_df) == 0:
                 return {"score": 0, "tp": 0, "tn": 0, "fp": 0, "fn": 0}
-            
+
             # Crear vectores de predicción basados en IDs
-            dataset_ids = set(dataset_df["id"])
             true_labels = dataset_df["clase_binaria"].values
-            
+
             # Predecir 1 si el ID está en predicted_positive_ids, 0 si no
-            predicted_labels = [1 if id_ in predicted_positive_ids else 0 for id_ in dataset_df["id"]]
-            
+            predicted_labels = [
+                1 if id_ in predicted_positive_ids else 0 for id_ in dataset_df["id"]
+            ]
+
             # Calcular matriz de confusión
             cm = confusion_matrix(true_labels, predicted_labels, labels=[0, 1])
             tn, fp, fn, tp = cm.ravel()
@@ -263,12 +259,12 @@ class OraculusBot:
 
     def save_submission(
         self,
-        user_info: Dict,
+        user_info: dict,
         submission_name: str,
         file_path: str,
         checksum: str,
-        public_results: Dict,
-        private_results: Dict,
+        public_results: dict,
+        private_results: dict,
         positives_predicted: int,
         threshold_category: str,
     ):
@@ -385,10 +381,10 @@ class OraculusBot:
 
         return new_badges
 
-    def _extract_file_from_message(self, message: Dict) -> Tuple[Optional[str], Optional[bytes]]:
+    def _extract_file_from_message(self, message: dict) -> tuple[str | None, bytes | None]:
         """Extraer archivo adjunto del mensaje de Zulip"""
         content = message["content"]
-        
+
         # Buscar archivos adjuntos en el mensaje
         # Patrón para enlaces de archivos de Zulip: [filename](url)
         file_pattern = r"\[([^\]]+\.csv)\]\(([^)]+)\)"
@@ -398,22 +394,21 @@ class OraculusBot:
             return None, None
 
         filename, file_url = matches[0]
-        
+
         try:
             # Si es una URL de Zulip, usar las credenciales del bot
             if self.config["zulip"]["site"] in file_url:
                 # Usar la API de Zulip para descargar el archivo
                 response = requests.get(
-                    file_url,
-                    auth=(self.config["zulip"]["email"], self.config["zulip"]["api_key"])
+                    file_url, auth=(self.config["zulip"]["email"], self.config["zulip"]["api_key"])
                 )
             else:
                 # URL externa
                 response = requests.get(file_url)
-            
+
             response.raise_for_status()
             return filename, response.content
-            
+
         except Exception as e:
             self.logger.error(f"Error descargando archivo desde {file_url}: {e}")
             return None, None
@@ -447,7 +442,7 @@ class OraculusBot:
 
         return str(file_path)
 
-    def process_submit(self, message: Dict, is_teacher: bool = False) -> str:
+    def process_submit(self, message: dict, is_teacher: bool = False) -> str:
         """Procesa comando submit"""
         user_email = message["sender_email"]
         submission_name = ""
@@ -462,13 +457,14 @@ class OraculusBot:
                     self.logger.warning(f"Envío fuera de fecha límite de {user_email}")
                     return "❌ La fecha límite para envíos ha expirado"
 
-
             # Extraer nombre del envío
             parts = message["content"].strip().split(" ", 1)
             if len(parts) < 2:
-                return "❌ Formato incorrecto. Uso: `submit <nombre_envio>` y adjunta el archivo CSV"
+                return (
+                    "❌ Formato incorrecto. Uso: `submit <nombre_envio>` y adjunta el archivo CSV"
+                )
 
-            submission_name = parts[1].split('\n')[0].strip()  # Tomar solo la primera línea
+            submission_name = parts[1].split("\n")[0].strip()  # Tomar solo la primera línea
             self.logger.info(f"Nombre del envío: {submission_name}")
 
             # Extraer archivo del mensaje
@@ -491,23 +487,27 @@ class OraculusBot:
 
             # Leer y validar CSV
             try:
-                df = pd.read_csv(file_path)
+                df = pd.read_csv(file_path, header=None)
             except Exception as e:
-                return f"❌ Error leyendo el archivo CSV: {str(e)}"
+                return f"❌ Error leyendo el archivo CSV: {e!s}"
 
             # Validar que tenga exactamente una columna (IDs)
             if df.shape[1] != 1:
-                self.logger.warning(f"CSV con formato incorrecto de {user_email}: {df.shape[1]} columnas")
+                self.logger.warning(
+                    f"CSV con formato incorrecto de {user_email}: {df.shape[1]} columnas"
+                )
                 return "❌ El CSV debe tener exactamente 1 columna con los IDs predichos como positivos"
 
             # Obtener IDs predichos como positivos
             predicted_positive_ids = set(df.iloc[:, 0].astype(int))
-            
+
             # Validar que todos los IDs existan en el dataset maestro
             invalid_ids = predicted_positive_ids - self.all_ids
             if invalid_ids:
                 self.logger.warning(f"IDs inválidos en envío de {user_email}")
-                return f"❌ IDs inválidos encontrados: {len(invalid_ids)} IDs no existen en el dataset"
+                return (
+                    f"❌ IDs inválidos encontrados: {len(invalid_ids)} IDs no existen en el dataset"
+                )
 
             # Calcular scores
             self.logger.info(f"Calculando scores para {submission_name}")
@@ -573,7 +573,9 @@ class OraculusBot:
                     t for t in self.config["gain_thresholds"] if t["category"] == threshold_category
                 )
 
-                response = f"🎯 **{threshold_config['message']}** {threshold_config.get('emoji', '')}\n\n"
+                response = (
+                    f"🎯 **{threshold_config['message']}** {threshold_config.get('emoji', '')}\n\n"
+                )
                 response += f"🆔 **ID Envío:** {submission_id}\n"
                 response += f"📊 **Score Público:** {public_results['score']:.4f}\n"
                 response += f"📈 **Positivos Predichos:** {positives_predicted}\n"
@@ -589,7 +591,7 @@ class OraculusBot:
 
         except Exception as e:
             self.logger.error(f"Error procesando envío '{submission_name}' de {user_email}: {e}")
-            return f"❌ Error procesando envío: {str(e)}"
+            return f"❌ Error procesando envío: {e!s}"
 
     def process_badges(self, user_id: int) -> str:
         """Lista badges del usuario"""
@@ -715,7 +717,7 @@ class OraculusBot:
         except ValueError:
             return "❌ El ID del envío debe ser un número"
         except Exception as e:
-            return f"❌ Error: {str(e)}"
+            return f"❌ Error: {e!s}"
 
     def process_duplicates(self) -> str:
         """Lista envíos duplicados (solo profesores)"""
@@ -740,7 +742,7 @@ class OraculusBot:
             return "✅ No se encontraron envíos duplicados"
 
         response = "🔍 **Envíos Duplicados:**\n\n"
-        for checksum, count, users, names in duplicates:
+        for checksum, _count, users, names in duplicates:
             response += f"**Checksum:** `{checksum[:16]}...`\n"
             response += f"**Usuarios:** {users}\n"
             response += f"**Envíos:** {names}\n\n"
@@ -912,9 +914,9 @@ class OraculusBot:
         if is_teacher:
             return f"""🤖 **OraculusBot - Ayuda para Profesores**
 
-**Competencia:** {competition['name']}
-**Descripción:** {competition['description']}
-**Fecha límite:** {competition['deadline']}
+**Competencia:** {competition["name"]}
+**Descripción:** {competition["description"]}
+**Fecha límite:** {competition["deadline"]}
 
 **Comandos disponibles:**
 • `submit <nombre>` - Enviar modelo y ver resultados completos
@@ -927,9 +929,9 @@ class OraculusBot:
         else:
             return f"""🤖 **OraculusBot - Ayuda para Estudiantes**
 
-**Competencia:** {competition['name']}
-**Descripción:** {competition['description']}
-**Fecha límite:** {competition['deadline']}
+**Competencia:** {competition["name"]}
+**Descripción:** {competition["description"]}
+**Fecha límite:** {competition["deadline"]}
 
 **Comandos disponibles:**
 • `submit <nombre>` - Enviar modelo (adjuntar CSV)
@@ -944,7 +946,7 @@ class OraculusBot:
         """Verifica si un usuario es profesor"""
         return email in self.config["teachers"]
 
-    def handle_message(self, message: Dict):
+    def handle_message(self, message: dict):
         """Maneja mensajes recibidos"""
         # Solo procesar mensajes privados
         if message["type"] != "private":
@@ -996,9 +998,7 @@ class OraculusBot:
                 response = self.get_help_message(is_teacher)
 
             # Enviar respuesta
-            self.client.send_message(
-                {"type": "private", "to": sender_email, "content": response}
-            )
+            self.client.send_message({"type": "private", "to": sender_email, "content": response})
 
             self.logger.info(f"Respuesta enviada a {sender_email}")
 
@@ -1011,7 +1011,9 @@ class OraculusBot:
 
     def run(self):
         """Ejecuta el bot"""
-        self.logger.info(f"OraculusBot iniciado para la competencia: {self.config['competition']['name']}")
+        self.logger.info(
+            f"OraculusBot iniciado para la competencia: {self.config['competition']['name']}"
+        )
         self.logger.info(f"Fecha límite: {self.config['competition']['deadline']}")
         self.logger.info(f"Profesores configurados: {len(self.config['teachers'])}")
         self.logger.info("Escuchando mensajes privados...")
@@ -1084,12 +1086,8 @@ def create_config_template():
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="OraculusBot - Bot de Zulip para competencias ML"
-    )
-    parser.add_argument(
-        "--config", "-c", help="Archivo de configuración"
-    )
+    parser = argparse.ArgumentParser(description="OraculusBot - Bot de Zulip para competencias ML")
+    parser.add_argument("--config", "-c", help="Archivo de configuración")
     parser.add_argument(
         "--create-config",
         action="store_true",

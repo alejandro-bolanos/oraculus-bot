@@ -1,11 +1,11 @@
 # Makefile para OraculusBot
 
-.PHONY: help install test test-unit test-integration test-fast test-coverage clean lint format setup-dev
+.PHONY: help install test test-unit test-integration test-fast test-coverage clean lint format check setup-dev
 
 # Variables
 PYTHON := uv run python
 PYTEST := uv run pytest
-PIP := uv add
+RUFF := uv run ruff
 
 help: ## Mostrar ayuda
 	@echo "Comandos disponibles:"
@@ -15,7 +15,7 @@ install: ## Instalar dependencias
 	uv sync
 
 setup-dev: ## Configurar entorno de desarrollo
-	uv add --dev pytest pytest-cov pytest-mock black isort flake8 mypy
+	uv add --dev pytest pytest-cov pytest-mock ruff mypy
 	@echo "Entorno de desarrollo configurado"
 
 test: ## Ejecutar todos los tests
@@ -38,13 +38,18 @@ test-watch: ## Ejecutar tests en modo watch (requiere pytest-watch)
 	uv add --dev pytest-watch
 	uv run ptw --runner "pytest -v"
 
-lint: ## Verificar calidad de código
-	uv run flake8 oraculus_bot.py test_*.py
+lint: ## Verificar calidad de código con Ruff
+	$(RUFF) check oraculus_bot.py test_*.py
 	uv run mypy oraculus_bot.py --ignore-missing-imports
 
-format: ## Formatear código
-	uv run black oraculus_bot.py test_*.py
-	uv run isort oraculus_bot.py test_*.py
+format: ## Formatear código con Ruff
+	$(RUFF) format oraculus_bot.py test_*.py
+
+format-check: ## Verificar formato sin modificar archivos
+	$(RUFF) format --check oraculus_bot.py test_*.py
+
+lint-fix: ## Corregir automáticamente problemas de linting
+	$(RUFF) check --fix oraculus_bot.py test_*.py
 
 clean: ## Limpiar archivos temporales
 	rm -rf .pytest_cache/
@@ -52,11 +57,9 @@ clean: ## Limpiar archivos temporales
 	rm -rf __pycache__/
 	rm -rf *.pyc
 	rm -rf .coverage
-	rm -rf logs/
-	rm -rf submissions/
-	rm -f *.db
 	find . -type d -name __pycache__ -delete
 	find . -type f -name "*.pyc" -delete
+	rm -rf .ruff_cache/
 
 run: ## Ejecutar el bot
 	$(PYTHON) oraculus_bot.py
@@ -69,8 +72,14 @@ demo-data: ## Crear datos de demostración
 	$(PYTHON) -c "import pandas as pd; pd.DataFrame({'id': range(1,101), 'clase_binaria': [1 if i%3==0 else 0 for i in range(1,101)], 'dataset': ['public' if i<=30 else 'private' for i in range(1,101)]}).to_csv('master_data_demo.csv', index=False)"
 	@echo "Archivo master_data_demo.csv creado"
 
-check: ## Verificación completa (lint + tests)
+check: ## Verificación completa (lint + format-check + tests)
+	make format-check
 	make lint
+	make test
+
+check-fix: ## Verificación completa con corrección automática
+	make format
+	make lint-fix
 	make test
 
 docker-build: ## Construir imagen Docker
