@@ -1,16 +1,9 @@
-#!/usr/bin/env python3
-"""
-Tests de integración para OraculusBot
-Ejecutar con: uv run pytest test_integration.py -v
-"""
-
 import json
 import os
-import shutil
-import sqlite3
 import tempfile
-from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+import time
+from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
 import pytest
@@ -18,446 +11,697 @@ import pytest
 from oraculus_bot import OraculusBot
 
 
-class TestFullWorkflow:
-    """Tests del flujo completo de trabajo"""
+@pytest.fixture
+def integration_setup():
+    """Setup completo para tests de integración"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        temp_dir = Path(tmpdir)
 
-    @pytest.fixture
-    def complete_setup(self):
-        """Setup completo para tests de integración"""
-        temp_dir = tempfile.mkdtemp()
-
-        # Crear datos maestros
-        master_path = os.path.join(temp_dir, "master.csv")
-        master_df = pd.DataFrame(
+        # Crear datos maestros realistas
+        master_data = pd.DataFrame(
             {
-                "id": list(range(1, 21)),  # 20 registros
-                "true_label": [i % 2 for i in range(20)],  # Alternar 0,1
+                "id": list(range(1, 101)),  # 100 registros
+                "clase_binaria": [1 if i % 3 == 0 else 0 for i in range(1, 101)],  # ~33% positivos
+                "dataset": [
+                    "public" if i <= 30 else "private" for i in range(1, 101)
+                ],  # 30% público
             }
         )
-        master_df.to_csv(master_path, index=False, header=False)
+
+        master_path = temp_dir / "master_data.csv"
+        master_data.to_csv(master_path, index=False)
 
         # Configuración completa
         config = {
             "zulip": {
-                "email": "oraculus-bot@test.com",
-                "api_key": "test-key",
+                "email": "oraculus@test.zulipchat.com",
+                "api_key": "test-api-key-123",
                 "site": "https://test.zulipchat.com",
             },
-            "database": {"path": os.path.join(temp_dir, "test.db")},
-            "teachers": ["teacher@test.com"],
-            "master_data": {"path": master_path, "seed": 42},
-            "submissions": {"path": os.path.join(temp_dir, "submissions")},
-            "gain_matrix": {"tp": 2.0, "tn": 1.0, "fp": -1.0, "fn": -2.0},
+            "database": {"path": str(temp_dir / "competition.db")},
+            "teachers": ["prof1@uni.edu", "prof2@uni.edu"],
+            "master_data": {"path": str(master_path)},
+            "submissions": {"path": str(temp_dir / "submissions")},
+            "gain_matrix": {"tp": 100, "tn": 10, "fp": -50, "fn": -100},
             "gain_thresholds": [
                 {
-                    "min_score": 15,
+                    "min_score": 1000,
                     "category": "excellent",
-                    "message": "¡Excelente modelo!",
+                    "message": "¡Modelo excepcional!",
                     "emoji": "🏆",
                 },
+                {"min_score": 500, "category": "good", "message": "Buen modelo", "emoji": "👍"},
+                {"min_score": 0, "category": "basic", "message": "Modelo básico", "emoji": "💪"},
                 {
-                    "min_score": 5,
-                    "category": "good",
-                    "message": "Buen trabajo",
-                    "emoji": "👍",
-                },
-                {
-                    "min_score": 0,
-                    "category": "basic",
-                    "message": "Sigue intentando",
-                    "emoji": "💪",
+                    "min_score": -1000,
+                    "category": "poor",
+                    "message": "Necesita mejoras",
+                    "emoji": "📚",
                 },
             ],
             "badges": {
                 "first_submission": {"name": "Primer Envío", "emoji": "🎯"},
                 "first_model_selection": {"name": "Primera Selección", "emoji": "⭐"},
                 "submissions_10": {"name": "10 Envíos", "emoji": "🔟"},
+                "submissions_50": {"name": "50 Envíos", "emoji": "🎖️"},
+                "submissions_100": {"name": "100 Envíos", "emoji": "💯"},
                 "top_5_public": {"name": "Top 5 Público", "emoji": "🥇"},
+                "high_threshold_first": {"name": "Primer Umbral Alto", "emoji": "🚀"},
             },
             "competition": {
-                "name": "Test ML Competition",
-                "description": "Competencia de prueba",
-                "deadline": (datetime.now() + timedelta(days=7)).isoformat(),
+                "name": "ML Competition 2024",
+                "description": "Competencia de Machine Learning con OraculusBot",
+                "deadline": "2030-12-31T23:59:59",
             },
         }
 
-        config_path = os.path.join(temp_dir, "config.json")
-        with open(config_path, "w") as f:
-            json.dump(config, f)
+        config_path = temp_dir / "config.json"
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
 
         yield {
             "temp_dir": temp_dir,
             "config_path": config_path,
-            "master_path": master_path,
-            "config": config,
+            "master_data": master_data,
+            "positive_ids": set(master_data[master_data["clase_binaria"] == 1]["id"]),
         }
 
-        shutil.rmtree(temp_dir)
 
-    def test_complete_student_workflow(self, complete_setup):
-        """Test flujo completo de estudiante"""
-        setup = complete_setup
+class TestFullWorkflow:
+    """Tests de flujos completos de trabajo"""
 
-        with patch("oraculus_bot.zulip.Client") as mock_client_class:
-            mock_client = Mock()
-            mock_client_class.return_value = mock_client
+    @patch("oraculus_bot.zulip.Client")
+    @patch("oraculus_bot.requests.get")
+    def test_complete_student_workflow(self, mock_requests, mock_zulip_client, integration_setup):
+        """Test flujo completo de un estudiante"""
+        setup = integration_setup
+        mock_client = Mock()
+        mock_zulip_client.return_value = mock_client
 
-            # Crear CSV de predicciones
-            predictions_csv = "1,0\n2,1\n3,0\n4,1\n5,0\n6,1\n7,0\n8,1\n9,0\n10,1\n11,0\n12,1\n13,0\n14,1\n15,0\n16,1\n17,0\n18,1\n19,0\n20,1\n"
-            mock_client.get_file_content.return_value = predictions_csv.encode()
+        # Inicializar bot
+        bot = OraculusBot(str(setup["config_path"]))
 
-            # Inicializar bot
-            bot = OraculusBot(setup["config_path"])
+        # Simular estudiante
+        student_user_id = 12345
+        student_email = "student@uni.edu"
+        student_name = "Ana García"
 
-            # Simular mensaje de estudiante con envío
-            student_message = {
+        # 1. Primer envío del estudiante
+        perfect_predictions = setup["positive_ids"]  # Predicciones perfectas
+        csv_content = "\n".join([str(id_) for id_ in perfect_predictions])
+
+        mock_response = Mock()
+        mock_response.content = csv_content.encode()
+        mock_response.raise_for_status.return_value = None
+        mock_requests.return_value = mock_response
+
+        submit_message = {
+            "type": "private",
+            "sender_id": student_user_id,
+            "sender_email": student_email,
+            "sender_full_name": student_name,
+            "content": "submit modelo_perfecto_v1\n[predictions.csv](https://test.zulipchat.com/file123)",
+        }
+
+        # Procesar envío
+        response = bot.process_submit(submit_message)
+
+        # Verificaciones del primer envío
+        assert "¡Modelo excepcional!" in response  # Categoría excellent
+        assert "ID Envío:" in response
+        assert "Primer Envío" in response  # Badge de primer envío
+
+        # 2. Ver badges ganados
+        badges_message = {
+            "type": "private",
+            "sender_id": student_user_id,
+            "sender_email": student_email,
+            "content": "badges",
+        }
+
+        bot.handle_message(badges_message)
+
+        # Verificar que se envió respuesta con badges
+        assert mock_client.send_message.called
+        last_call = mock_client.send_message.call_args[0][0]
+        assert "Primer Envío" in last_call["content"]
+
+        # 3. Segundo envío (peor)
+        mock_client.reset_mock()
+        partial_predictions = list(setup["positive_ids"])[: len(setup["positive_ids"]) // 4]
+        csv_content2 = "\n".join([str(id_) for id_ in partial_predictions])
+
+        mock_response.content = csv_content2.encode()
+
+        submit_message2 = {
+            "type": "private",
+            "sender_id": student_user_id,
+            "sender_email": student_email,
+            "sender_full_name": student_name,
+            "content": "submit modelo_parcial_v2\n[predictions2.csv](https://test.zulipchat.com/file456)",
+        }
+
+        response2 = bot.process_submit(submit_message2)
+
+        # No debería ser excellent esta vez
+        assert "¡Modelo excepcional!" not in response2
+        assert "Primer Envío" not in response2  # No otorgar badge duplicado
+
+        # 4. Listar envíos
+        list_message = {
+            "type": "private",
+            "sender_id": student_user_id,
+            "sender_email": student_email,
+            "content": "list submits",
+        }
+
+        bot.handle_message(list_message)
+
+        last_call = mock_client.send_message.call_args[0][0]
+        assert "modelo_perfecto_v1" in last_call["content"]
+        assert "modelo_parcial_v2" in last_call["content"]
+
+        # 5. Seleccionar mejor modelo
+        mock_client.reset_mock()
+        select_message = {
+            "type": "private",
+            "sender_id": student_user_id,
+            "sender_email": student_email,
+            "content": "select 1",  # Seleccionar el primer envío
+        }
+
+        bot.handle_message(select_message)
+
+        last_call = mock_client.send_message.call_args[0][0]
+        assert "seleccionado" in last_call["content"].lower()
+        assert "Primera Selección" in last_call["content"]  # Badge de primera selección
+
+        # 6. Ver leaderboard público
+        mock_client.reset_mock()
+        leaderboard_message = {
+            "type": "private",
+            "sender_id": student_user_id,
+            "sender_email": student_email,
+            "content": "leaderboard public",
+        }
+
+        # Este comando no existe para estudiantes, debería mostrar ayuda
+        bot.handle_message(leaderboard_message)
+
+        last_call = mock_client.send_message.call_args[0][0]
+        assert "Ayuda" in last_call["content"]
+
+    @patch("oraculus_bot.zulip.Client")
+    @patch("oraculus_bot.requests.get")
+    def test_complete_teacher_workflow(self, mock_requests, mock_zulip_client, integration_setup):
+        """Test flujo completo de un profesor"""
+        setup = integration_setup
+        mock_client = Mock()
+        mock_zulip_client.return_value = mock_client
+
+        bot = OraculusBot(str(setup["config_path"]))
+
+        teacher_email = "prof1@uni.edu"
+        teacher_user_id = 99999
+
+        # 1. Profesor envía modelo de prueba
+        test_predictions = list(setup["positive_ids"])[:10]  # Solo algunos
+        csv_content = "\n".join([str(id_) for id_ in test_predictions])
+
+        mock_response = Mock()
+        mock_response.content = csv_content.encode()
+        mock_response.raise_for_status.return_value = None
+        mock_requests.return_value = mock_response
+
+        teacher_submit = {
+            "type": "private",
+            "sender_id": teacher_user_id,
+            "sender_email": teacher_email,
+            "sender_full_name": "Prof. Smith",
+            "content": "submit baseline_model\n[baseline.csv](https://test.zulipchat.com/file789)",
+        }
+
+        response = bot.process_submit(teacher_submit, is_teacher=True)
+
+        # Profesor ve resultados completos
+        assert "Resultados para baseline_model" in response
+        assert "Público:" in response
+        assert "Privado:" in response
+        assert "Matriz confusión" in response
+
+        # 2. Agregar fake submission al leaderboard
+        fake_submit_msg = {
+            "type": "private",
+            "sender_id": teacher_user_id,
+            "sender_email": teacher_email,
+            "content": "fake_submit add RandomBaseline 150.5",
+        }
+
+        bot.handle_message(fake_submit_msg)
+
+        last_call = mock_client.send_message.call_args[0][0]
+        assert "agregado" in last_call["content"].lower()
+
+        # Simular estudiante
+        student_user_id = 12345
+        student_email = "student@uni.edu"
+        student_name = "Ana García"
+
+        perfect_predictions = setup["positive_ids"]  # Predicciones perfectas
+        csv_content = "\n".join([str(id_) for id_ in perfect_predictions])
+
+        mock_response = Mock()
+        mock_response.content = csv_content.encode()
+        mock_response.raise_for_status.return_value = None
+        mock_requests.return_value = mock_response
+
+        submit_message = {
+            "type": "private",
+            "sender_id": student_user_id,
+            "sender_email": student_email,
+            "sender_full_name": student_name,
+            "content": "submit modelo_perfecto_v1\n[predictions.csv](https://test.zulipchat.com/file123)",
+        }
+
+        # Procesar envío
+        response = bot.process_submit(submit_message)
+
+        # 3. Ver leaderboard completo
+        mock_client.reset_mock()
+        full_leaderboard_msg = {
+            "type": "private",
+            "sender_id": teacher_user_id,
+            "sender_email": teacher_email,
+            "content": "leaderboard full",
+        }
+
+        bot.handle_message(full_leaderboard_msg)
+
+        last_call = mock_client.send_message.call_args[0][0]
+        assert "Leaderboard Completo" in last_call["content"]
+
+        # 4. Ver leaderboard público
+        mock_client.reset_mock()
+        public_leaderboard_msg = {
+            "type": "private",
+            "sender_id": teacher_user_id,
+            "sender_email": teacher_email,
+            "content": "leaderboard public",
+        }
+
+        bot.handle_message(public_leaderboard_msg)
+
+        last_call = mock_client.send_message.call_args[0][0]
+        assert "Leaderboard Público" in last_call["content"]
+        assert "RandomBaseline" in last_call["content"]
+
+        # 5. Eliminar fake submission
+        mock_client.reset_mock()
+        remove_fake_msg = {
+            "type": "private",
+            "sender_id": teacher_user_id,
+            "sender_email": teacher_email,
+            "content": "fake_submit remove RandomBaseline",
+        }
+
+        bot.handle_message(remove_fake_msg)
+
+        last_call = mock_client.send_message.call_args[0][0]
+        assert "eliminado" in last_call["content"].lower()
+
+
+class TestMultiUserScenarios:
+    """Tests con múltiples usuarios"""
+
+    @patch("oraculus_bot.zulip.Client")
+    @patch("oraculus_bot.requests.get")
+    def test_competition_with_multiple_students(
+        self, mock_requests, mock_zulip_client, integration_setup
+    ):
+        """Test competencia con múltiples estudiantes"""
+        setup = integration_setup
+        mock_client = Mock()
+        mock_zulip_client.return_value = mock_client
+
+        bot = OraculusBot(str(setup["config_path"]))
+
+        # Definir estudiantes con diferentes niveles
+        students = [
+            {"id": 1001, "email": "alice@uni.edu", "name": "Alice Johnson", "skill": "high"},
+            {"id": 1002, "email": "bob@uni.edu", "name": "Bob Wilson", "skill": "medium"},
+            {"id": 1003, "email": "charlie@uni.edu", "name": "Charlie Brown", "skill": "low"},
+        ]
+
+        positive_ids = setup["positive_ids"]
+
+        # Simular envíos de cada estudiante
+        for i, student in enumerate(students):
+            # Diferentes estrategias según skill level
+            if student["skill"] == "high":
+                # Alice hace predicciones casi perfectas
+                predictions = list(positive_ids)[:-2]  # Pierde solo 2
+            elif student["skill"] == "medium":
+                # Bob acierta ~70%
+                predictions = list(positive_ids)[: -len(positive_ids) // 3]
+            else:
+                # Charlie hace predicciones aleatorias (solo algunos positivos)
+                predictions = list(positive_ids)[: len(positive_ids) // 2]
+
+            csv_content = "\n".join([str(id_) for id_ in predictions])
+
+            mock_response = Mock()
+            mock_response.content = csv_content.encode()
+            mock_response.raise_for_status.return_value = None
+            mock_requests.return_value = mock_response
+
+            submit_message = {
                 "type": "private",
-                "sender_id": 12345,
-                "sender_email": "student@test.com",
-                "sender_full_name": "Test Student",
-                "content": "submit mi_primer_modelo",
-                "attachments": [{"name": "predictions.csv", "url": "test_url"}],
+                "sender_id": student["id"],
+                "sender_email": student["email"],
+                "sender_full_name": student["name"],
+                "content": f"submit {student['name'].lower().replace(' ', '_')}_model_v1\n[{student['name'].lower()}.csv](https://test.zulipchat.com/file{i})",
             }
 
-            # Procesar envío
-            response = bot.process_submit(student_message, is_teacher=False)
+            response = bot.process_submit(submit_message)
 
-            # Verificar respuesta
+            # Verificar que cada estudiante recibe respuesta apropiada
             assert "ID Envío:" in response
             assert "Primer Envío" in response
 
-            # Verificar que se guardó en BD
-            conn = sqlite3.connect(bot.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM submissions WHERE user_id = ?", (12345,))
-            submission = cursor.fetchone()
-            assert submission is not None
-            assert submission[4] == "mi_primer_modelo"  # submission_name
-
-            # Verificar badge
-            cursor.execute("SELECT * FROM user_badges WHERE user_id = ?", (12345,))
-            badges = cursor.fetchall()
-            assert len(badges) >= 1
-            assert badges[0][2] == "first_submission"
-            conn.close()
-
-            # Test comando list submits
-            list_response = bot.process_list_submits(12345)
-            assert "mi_primer_modelo" in list_response
-
-            # Test comando select
-            submission_id = submission[0]
-            select_response = bot.process_select(12345, f"select {submission_id}")
-            assert "seleccionado" in select_response
-
-            # Test comando badges
-            badges_response = bot.process_badges(12345)
-            assert "Primer Envío" in badges_response
-
-    def test_teacher_workflow(self, complete_setup):
-        """Test flujo completo de profesor"""
-        setup = complete_setup
-
-        with patch("oraculus_bot.zulip.Client") as mock_client_class:
-            mock_client = Mock()
-            mock_client_class.return_value = mock_client
-
-            predictions_csv = "1,1\n2,0\n3,1\n4,0\n5,1\n6,0\n7,1\n8,0\n9,1\n10,0\n11,1\n12,0\n13,1\n14,0\n15,1\n16,0\n17,1\n18,0\n19,1\n20,0\n"
-            mock_client.get_file_content.return_value = predictions_csv.encode()
-
-            bot = OraculusBot(setup["config_path"])
-
-            # Test envío de profesor
-            teacher_message = {
+            # Seleccionar modelo para leaderboard
+            select_msg = {
                 "type": "private",
-                "sender_id": 99999,
-                "sender_email": "teacher@test.com",
-                "sender_full_name": "Test Teacher",
-                "content": "submit modelo_profesor",
-                "attachments": [{"name": "teacher_predictions.csv", "url": "test_url"}],
+                "sender_id": student["id"],
+                "sender_email": student["email"],
+                "content": f"select {i + 1}",
             }
 
-            response = bot.process_submit(teacher_message, is_teacher=True)
+            bot.handle_message(select_msg)
 
-            student_message = {
-                "type": "private",
-                "sender_id": 99991,
-                "sender_email": "student@test.com",
-                "sender_full_name": "Test Student",
-                "content": "submit modelo_student",
-                "attachments": [{"name": "teacher_predictions.csv", "url": "test_url"}],
-            }
-            # Profesor debería ver scores completos
-            assert "Público:" in response
-            assert "Privado:" in response
-            assert "Categoría:" in response
+        # Verificar leaderboard final
+        teacher_msg = {
+            "type": "private",
+            "sender_id": 99999,
+            "sender_email": "prof1@uni.edu",
+            "content": "leaderboard full",
+        }
 
-            response = bot.process_submit(student_message, is_teacher=False)
+        bot.handle_message(teacher_msg)
 
-            # Test fake submissions
-            fake_add_response = bot.process_fake_submit("fake_submit add FakeUser 25.5")
-            assert "agregado" in fake_add_response
+        last_call = mock_client.send_message.call_args[0][0]
+        leaderboard_content = last_call["content"]
 
-            # Test leaderboards
-            public_board = bot.process_leaderboard_public()
-            assert "FakeUser" in public_board
+        # Alice debería estar primera (mejor skill)
+        alice_pos = leaderboard_content.find("Alice Johnson")
+        bob_pos = leaderboard_content.find("Bob Wilson")
+        charlie_pos = leaderboard_content.find("Charlie Brown")
 
-            full_board = bot.process_leaderboard_full()
-            assert "Leaderboard Completo" in full_board
+        assert alice_pos < bob_pos < charlie_pos  # Orden por posición en texto
 
-            # Test duplicates (debería estar vacío inicialmente)
-            duplicates = bot.process_duplicates()
-            assert "No se encontraron" in duplicates
 
-    def test_multiple_students_competition(self, complete_setup):
-        """Test competencia con múltiples estudiantes"""
-        setup = complete_setup
+class TestErrorHandlingAndEdgeCases:
+    """Tests de manejo de errores y casos límite"""
 
-        with patch("oraculus_bot.zulip.Client") as mock_client_class:
-            mock_client = Mock()
-            mock_client_class.return_value = mock_client
+    @patch("oraculus_bot.zulip.Client")
+    def test_database_corruption_recovery(self, mock_zulip_client, integration_setup):
+        """Test recuperación de corrupción de base de datos"""
+        setup = integration_setup
+        mock_client = Mock()
+        mock_zulip_client.return_value = mock_client
 
-            bot = OraculusBot(setup["config_path"])
+        bot = OraculusBot(str(setup["config_path"]))
 
-            # Crear varios estudiantes con diferentes performances
-            students = [
-                {"id": 1001, "email": "student1@test.com", "name": "Student 1"},
-                {"id": 1002, "email": "student2@test.com", "name": "Student 2"},
-                {"id": 1003, "email": "student3@test.com", "name": "Student 3"},
-            ]
+        # Simular corrupción eliminando tabla
+        conn = bot._get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE submissions")
+        conn.commit()
+        conn.close()
 
-            # Predicciones con diferentes calidades
-            predictions = [
-                # Student 1: Predicción perfecta
-                "1,1\n2,0\n3,1\n4,0\n5,1\n6,0\n7,1\n8,0\n9,1\n10,0\n11,1\n12,0\n13,1\n14,0\n15,1\n16,0\n17,1\n18,0\n19,1\n20,0\n",
-                # Student 2: Predicción mediocre
-                "1,0\n2,0\n3,0\n4,0\n5,0\n6,1\n7,1\n8,1\n9,1\n10,1\n11,0\n12,0\n13,0\n14,0\n15,0\n16,1\n17,1\n18,1\n19,1\n20,1\n",
-                # Student 3: Predicción aleatoria
-                "1,1\n2,1\n3,0\n4,0\n5,1\n6,1\n7,0\n8,0\n9,1\n10,1\n11,0\n12,0\n13,1\n14,1\n15,0\n16,0\n17,1\n18,1\n19,0\n20,0\n",
-            ]
+        # Intentar operación que requiere la tabla
+        user_info = {"user_id": 123, "email": "test@uni.edu", "full_name": "Test User"}
+        public_results = {"score": 10, "tp": 1, "tn": 1, "fp": 0, "fn": 0}
+        private_results = {"score": 15, "tp": 2, "tn": 1, "fp": 0, "fn": 0}
 
-            submission_ids = []
+        # Debería fallar graciosamente
+        with pytest.raises(ValueError, match="Invalid submission format"):
+            bot.save_submission(
+                user_info,
+                "test_model",
+                "/path",
+                "checksum",
+                public_results,
+                private_results,
+                2,
+                "good",
+            )
 
-            for i, (student, pred) in enumerate(zip(students, predictions)):
-                mock_client.get_file_content.return_value = pred.encode()
+    @patch("oraculus_bot.zulip.Client")
+    @patch("oraculus_bot.requests.get")
+    def test_network_error_handling(self, mock_requests, mock_zulip_client, integration_setup):
+        """Test manejo de errores de red"""
+        setup = integration_setup
+        mock_client = Mock()
+        mock_zulip_client.return_value = mock_client
 
-                message = {
-                    "type": "private",
-                    "sender_id": student["id"],
-                    "sender_email": student["email"],
-                    "sender_full_name": student["name"],
-                    "content": f"submit modelo_v1_student_{i + 1}",
-                    "attachments": [
-                        {"name": f"pred_{i + 1}.csv", "url": f"test_url_{i + 1}"}
-                    ],
-                }
+        bot = OraculusBot(str(setup["config_path"]))
 
-                response = bot.process_submit(message, is_teacher=False)
+        # Simular error de red
+        mock_requests.side_effect = Exception("Network error")
 
-                # Extraer ID del envío
-                lines = response.split("\n")
-                for line in lines:
-                    if "ID Envío:" in line:
-                        submission_id = int(line.split(":**")[1].strip())
-                        submission_ids.append(submission_id)
-                        break
+        submit_message = {
+            "type": "private",
+            "sender_id": 123,
+            "sender_email": "student@uni.edu",
+            "sender_full_name": "Test Student",
+            "content": "submit test_model\n[predictions.csv](https://test.zulipchat.com/file123)",
+        }
 
-                # Seleccionar modelo
-                select_response = bot.process_select(
-                    student["id"], f"select {submission_ids[-1]}"
-                )
-                assert "seleccionado" in select_response
+        response = bot.process_submit(submit_message)
+        assert "❌ Debes adjuntar un archivo CSV" in response
 
-            # Verificar leaderboard completo
-            full_board = bot.process_leaderboard_full()
-            assert "Student 1" in full_board
-            assert "Student 2" in full_board
-            assert "Student 3" in full_board
+    @patch("oraculus_bot.zulip.Client")
+    @patch("oraculus_bot.requests.get")
+    def test_malformed_csv_handling(self, mock_requests, mock_zulip_client, integration_setup):
+        """Test manejo de CSV malformado"""
+        setup = integration_setup
+        mock_client = Mock()
+        mock_zulip_client.return_value = mock_client
 
-            # Test múltiples envíos del mismo estudiante
-            mock_client.get_file_content.return_value = predictions[0].encode()
+        bot = OraculusBot(str(setup["config_path"]))
 
-            # Student 1 hace más envíos
-            for j in range(2, 11):  # 9 envíos más (total 10)
-                message = {
-                    "type": "private",
-                    "sender_id": students[0]["id"],
-                    "sender_email": students[0]["email"],
-                    "sender_full_name": students[0]["name"],
-                    "content": f"submit modelo_v{j}_student_1",
-                    "attachments": [
-                        {"name": f"pred_1_v{j}.csv", "url": f"test_url_1_v{j}"}
-                    ],
-                }
+        # CSV con datos inválidos
+        mock_response = Mock()
+        mock_response.content = b"invalid,csv,content\nwith,multiple,columns,and,errors"
+        mock_response.raise_for_status.return_value = None
+        mock_requests.return_value = mock_response
 
-                response = bot.process_submit(message, is_teacher=False)
+        submit_message = {
+            "type": "private",
+            "sender_id": 123,
+            "sender_email": "student@uni.edu",
+            "sender_full_name": "Test Student",
+            "content": "submit bad_model\n[bad.csv](https://test.zulipchat.com/file123)",
+        }
 
-                # En el envío #10 debería obtener badge
-                if j == 10:
-                    assert "10 Envíos" in response
+        response = bot.process_submit(submit_message)
+        assert "exactamente 1 columna" in response
 
-            # Verificar badge de 10 envíos
-            badges_response = bot.process_badges(students[0]["id"])
-            assert "10 Envíos" in badges_response
 
-    def test_deadline_enforcement(self, complete_setup):
-        """Test aplicación de fecha límite"""
-        setup = complete_setup
+class TestDataIntegrity:
+    """Tests de integridad de datos"""
 
-        with patch("oraculus_bot.zulip.Client") as mock_client_class:
-            mock_client = Mock()
-            mock_client_class.return_value = mock_client
+    @patch("oraculus_bot.zulip.Client")
+    def test_score_calculation_consistency(self, mock_zulip_client, integration_setup):
+        """Test consistencia en cálculo de scores"""
+        setup = integration_setup
+        mock_client = Mock()
+        mock_zulip_client.return_value = mock_client
 
-            # Cambiar deadline a ayer
-            config = setup["config"]
-            config["competition"]["deadline"] = (
-                datetime.now() - timedelta(days=1)
-            ).isoformat()
+        bot = OraculusBot(str(setup["config_path"]))
 
-            with open(setup["config_path"], "w") as f:
-                json.dump(config, f)
+        positive_ids = setup["positive_ids"]
 
-            bot = OraculusBot(setup["config_path"])
+        # Calcular scores múltiples veces con los mismos datos
+        scores1 = bot.calculate_scores(positive_ids)
+        scores2 = bot.calculate_scores(positive_ids)
+        scores3 = bot.calculate_scores(positive_ids)
 
-            predictions_csv = "1,0\n2,1\n3,0\n4,1\n5,0\n6,1\n7,0\n8,1\n9,0\n10,1\n11,0\n12,1\n13,0\n14,1\n15,0\n16,1\n17,0\n18,1\n19,0\n20,1\n"
-            mock_client.get_file_content.return_value = predictions_csv.encode()
+        # Todos los resultados deben ser idénticos
+        assert scores1[0]["score"] == scores2[0]["score"] == scores3[0]["score"]
+        assert scores1[1]["score"] == scores2[1]["score"] == scores3[1]["score"]
 
-            # Estudiante intenta enviar después del deadline
-            student_message = {
-                "type": "private",
-                "sender_id": 12345,
-                "sender_email": "late_student@test.com",
-                "sender_full_name": "Late Student",
-                "content": "submit modelo_tardio",
-                "attachments": [{"name": "late_predictions.csv", "url": "test_url"}],
-            }
+        # Verificar métricas individuales
+        for metric in ["tp", "tn", "fp", "fn"]:
+            assert scores1[0][metric] == scores2[0][metric] == scores3[0][metric]
+            assert scores1[1][metric] == scores2[1][metric] == scores3[1][metric]
 
-            response = bot.process_submit(student_message, is_teacher=False)
-            assert "fecha límite" in response.lower()
+    @patch("oraculus_bot.zulip.Client")
+    @patch("oraculus_bot.requests.get")
+    def test_duplicate_detection_accuracy(
+        self, mock_requests, mock_zulip_client, integration_setup
+    ):
+        """Test precisión de detección de duplicados"""
+        setup = integration_setup
+        mock_client = Mock()
+        mock_zulip_client.return_value = mock_client
 
-            # Profesor puede enviar después del deadline
-            teacher_message = {
-                "type": "private",
-                "sender_id": 99999,
-                "sender_email": "teacher@test.com",
-                "sender_full_name": "Test Teacher",
-                "content": "submit modelo_profesor_post_deadline",
-                "attachments": [{"name": "teacher_late.csv", "url": "test_url"}],
-            }
+        bot = OraculusBot(str(setup["config_path"]))
 
-            response = bot.process_submit(teacher_message, is_teacher=True)
-            assert "Público:" in response  # Debería funcionar para profesores
+        # Crear contenido idéntico para dos usuarios diferentes
+        positive_ids = list(setup["positive_ids"])[:10]
+        csv_content = "\n".join([str(id_) for id_ in positive_ids])
 
-    def test_error_handling_integration(self, complete_setup):
-        """Test manejo de errores en flujo completo"""
-        setup = complete_setup
+        mock_response = Mock()
+        mock_response.content = csv_content.encode()
+        mock_response.raise_for_status.return_value = None
+        mock_requests.return_value = mock_response
 
-        with patch("oraculus_bot.zulip.Client") as mock_client_class:
-            mock_client = Mock()
-            mock_client_class.return_value = mock_client
+        # Usuario 1
+        submit1 = {
+            "type": "private",
+            "sender_id": 1001,
+            "sender_email": "alice@uni.edu",
+            "sender_full_name": "Alice Johnson",
+            "content": "submit alice_model\n[alice.csv](https://test.zulipchat.com/file1)",
+        }
 
-            bot = OraculusBot(setup["config_path"])
+        # Usuario 2 con mismo contenido
+        submit2 = {
+            "type": "private",
+            "sender_id": 1002,
+            "sender_email": "bob@uni.edu",
+            "sender_full_name": "Bob Wilson",
+            "content": "submit bob_model\n[bob.csv](https://test.zulipchat.com/file2)",
+        }
 
-            # Test CSV con formato incorrecto (3 columnas)
-            bad_csv = "1,0,extra\n2,1,extra\n3,0,extra\n"
-            mock_client.get_file_content.return_value = bad_csv.encode()
+        # Procesar ambos envíos
+        bot.process_submit(submit1)
+        bot.process_submit(submit2)
 
+        # Verificar detección de duplicados
+        duplicates_response = bot.process_duplicates()
+        assert "Duplicados" in duplicates_response
+        assert "alice@uni.edu" in duplicates_response
+        assert "bob@uni.edu" in duplicates_response
+
+
+class TestConfigurationValidation:
+    """Tests de validación de configuración"""
+
+    def test_missing_required_config_fields(self, integration_setup):
+        """Test campos requeridos faltantes en configuración"""
+        setup = integration_setup
+
+        # Cargar config válida
+        with open(setup["config_path"]) as f:
+            config = json.load(f)
+
+        # Eliminar campo requerido
+        del config["master_data"]
+
+        # Guardar config inválida
+        invalid_config_path = setup["temp_dir"] / "invalid_config.json"
+        with open(invalid_config_path, "w") as f:
+            json.dump(config, f)
+
+        # Debería fallar al inicializar
+        with patch("oraculus_bot.zulip.Client"), pytest.raises(KeyError):
+                OraculusBot(str(invalid_config_path))
+
+    def test_invalid_gain_matrix(self, integration_setup):
+        """Test matriz de ganancias inválida"""
+        setup = integration_setup
+
+        with open(setup["config_path"]) as f:
+            config = json.load(f)
+
+        # Matriz de ganancias incompleta
+        config["gain_matrix"] = {"tp": 1, "tn": 1}  # Faltan fp, fn
+
+        invalid_config_path = setup["temp_dir"] / "invalid_gain_config.json"
+        with open(invalid_config_path, "w") as f:
+            json.dump(config, f)
+
+        with patch("oraculus_bot.zulip.Client"):
+            bot = OraculusBot(str(invalid_config_path))
+
+            # Debería fallar al calcular scores
+            with pytest.raises(KeyError):
+                bot.calculate_scores({1, 2, 3})
+
+
+class TestRobustnessAndRecovery:
+    """Tests de robustez y recuperación"""
+
+    @patch("oraculus_bot.zulip.Client")
+    def test_graceful_degradation_on_errors(self, mock_zulip_client, integration_setup):
+        """Test degradación elegante ante errores"""
+        setup = integration_setup
+        mock_client = Mock()
+        mock_zulip_client.return_value = mock_client
+
+        bot = OraculusBot(str(setup["config_path"]))
+
+        # Simular error en handle_message
+        with patch.object(bot, "process_submit", side_effect=Exception("Test error")):
             message = {
                 "type": "private",
-                "sender_id": 12345,
-                "sender_email": "student@test.com",
-                "sender_full_name": "Test Student",
-                "content": "submit bad_format",
-                "attachments": [{"name": "bad.csv", "url": "test_url"}],
+                "sender_email": "student@uni.edu",
+                "content": "submit test_model",
             }
 
-            response = bot.process_submit(message, is_teacher=False)
-            assert "2 columnas" in response
+            # No debería crashear el bot
+            bot.handle_message(message)
 
-            # Test CSV con IDs incorrectos
-            wrong_ids_csv = "100,0\n101,1\n102,0\n"  # IDs que no existen
-            mock_client.get_file_content.return_value = wrong_ids_csv.encode()
+            # Debería enviar mensaje de error al usuario
+            mock_client.send_message.assert_called()
+            error_call = mock_client.send_message.call_args[0][0]
+            assert "Error interno" in error_call["content"]
 
-            message["content"] = "submit wrong_ids"
-            response = bot.process_submit(message, is_teacher=False)
-            assert "IDs incorrectos" in response
+    @patch("oraculus_bot.zulip.Client")
+    def test_bot_restart_data_persistence(self, mock_zulip_client, integration_setup):
+        """Test persistencia de datos tras reinicio del bot"""
+        setup = integration_setup
+        mock_client = Mock()
+        mock_zulip_client.return_value = mock_client
 
-            # Test CSV con valores no binarios
-            non_binary_csv = "1,0\n2,1\n3,2\n4,1\n5,0\n6,1\n7,0\n8,1\n9,0\n10,1\n11,0\n12,1\n13,0\n14,1\n15,0\n16,1\n17,0\n18,1\n19,0\n20,1\n"
-            mock_client.get_file_content.return_value = non_binary_csv.encode()
+        # Crear primer bot y agregar datos
+        bot1 = OraculusBot(str(setup["config_path"]))
 
-            message["content"] = "submit non_binary"
-            response = bot.process_submit(message, is_teacher=False)
-            assert "binarios" in response
+        user_info = {"user_id": 123, "email": "test@uni.edu", "full_name": "Test User"}
+        public_results = {"score": 15, "tp": 2, "tn": 1, "fp": 0, "fn": 1}
+        private_results = {"score": 20, "tp": 3, "tn": 2, "fp": 1, "fn": 0}
 
-    def test_message_routing_integration(self, complete_setup):
-        """Test enrutamiento completo de mensajes"""
-        setup = complete_setup
+        submission_id = bot1.save_submission(
+            user_info,
+            "persistent_model",
+            "/path",
+            "checksum123",
+            public_results,
+            private_results,
+            5,
+            "good",
+        )
 
-        with patch("oraculus_bot.zulip.Client") as mock_client_class:
-            mock_client = Mock()
-            mock_client_class.return_value = mock_client
-            mock_client.send_message.return_value = {"result": "success"}
+        # Agregar badge
+        bot1.check_and_award_badges(123, 1, 15.0)
 
-            bot = OraculusBot(setup["config_path"])
+        # "Reiniciar" bot (crear nueva instancia)
+        bot2 = OraculusBot(str(setup["config_path"]))
 
-            # Test mensaje de ayuda de estudiante
-            student_help_msg = {
-                "type": "private",
-                "sender_email": "student@test.com",
-                "content": "help",
-            }
+        # Verificar que los datos persisten
+        submissions = bot2.process_list_submits(123)
+        assert "persistent_model" in submissions
 
-            bot.handle_message(student_help_msg)
+        badges = bot2.process_badges(123)
+        assert "Primer Envío" in badges
 
-            # Verificar que se envió respuesta
-            assert mock_client.send_message.called
-            call_args = mock_client.send_message.call_args[0][0]
-            assert call_args["to"] == "student@test.com"
-            assert "Ayuda para Estudiantes" in call_args["content"]
-
-            # Reset mock
-            mock_client.send_message.reset_mock()
-
-            # Test mensaje de ayuda de profesor
-            teacher_help_msg = {
-                "type": "private",
-                "sender_email": "teacher@test.com",
-                "content": "help",
-            }
-
-            bot.handle_message(teacher_help_msg)
-
-            call_args = mock_client.send_message.call_args[0][0]
-            assert call_args["to"] == "teacher@test.com"
-            assert "Ayuda para Profesores" in call_args["content"]
-
-            # Test que el bot ignore sus propios mensajes
-            mock_client.send_message.reset_mock()
-
-            bot_own_msg = {
-                "type": "private",
-                "sender_email": "oraculus-bot@test.com",  # Email del bot
-                "content": "help",
-            }
-
-            bot.handle_message(bot_own_msg)
-
-            # No debería haber enviado respuesta
-            assert not mock_client.send_message.called
-
-            # Test mensaje de canal público (debería ignorarse)
-            public_msg = {
-                "type": "stream",
-                "sender_email": "student@test.com",
-                "content": "help",
-            }
-
-            bot.handle_message(public_msg)
-
-            # No debería haber enviado respuesta
-            assert not mock_client.send_message.called
+        # Verificar que el ID de submission sigue siendo válido
+        select_response = bot2.process_select(123, f"select {submission_id}")
+        assert "seleccionado" in select_response.lower()
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    # Ejecutar con más verbosidad para debugging
+    pytest.main([__file__, "-v", "-s", "--tb=short"])

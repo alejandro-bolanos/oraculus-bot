@@ -23,12 +23,12 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 dev-dependencies = [
+    "mypy>=1.17.1",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
-    "black>=22.0.0",
-    "isort>=5.10.0",
-    "flake8>=4.0.0",
+    "ruff>=0.4.0",
+    "types-requests>=2.32.4.20250809",
 ]
 
 [tool.pytest.ini_options]
@@ -63,3 +63,77 @@ exclude_lines = [
     "raise AssertionError",
     "raise NotImplementedError",
 ]
+[tool.ruff]
+# Configuración general
+line-length = 100
+target-version = "py310"
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+]
+
+[tool.ruff.lint]
+# Reglas habilitadas (equivalente a flake8 + isort + más)
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # Pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "N",    # pep8-naming
+    "SIM",  # flake8-simplify
+    "RUF",  # Ruff-specific rules
+]
+
+# Reglas deshabilitadas
+ignore = [
+    "E203",  # whitespace before ':'
+    "E501",  # line too long (manejado por el formatter)
+    "B008",  # do not perform function calls in argument defaults
+    "N806",  # variable name should be lowercase
+    "SIM108", # use ternary operator instead of if-else-block
+]
+
+# Permitir correcciones automáticas para estas reglas
+fixable = ["ALL"]
+unfixable = []
+
+# Permitir variables no utilizadas que empiecen con underscore
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests pueden tener imports no utilizados y asserts
+"test_*.py" = ["F401", "F811"]
+
+[tool.ruff.lint.isort]
+# Configuración de isort (reemplaza la sección [tool.isort])
+known-first-party = ["oraculus_bot"]
+known-third-party = ["pandas", "requests", "zulip", "sklearn", "pytest"]
+
+[tool.ruff.format]
+# Configuración del formatter (reemplaza black)
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
