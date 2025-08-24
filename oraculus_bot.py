@@ -9,15 +9,18 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional, Set
 
 import pandas as pd
+import requests
 import zulip
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import train_test_split
+
 
 
 # Configurar adaptadores de datetime para SQLite (Python 3.12+)
@@ -134,7 +137,7 @@ class OraculusBot:
                     tn INTEGER,
                     fp INTEGER,
                     fn INTEGER,
-                    estimulos INTEGER,
+                    positives_predicted INTEGER,
                     threshold_category TEXT,
                     is_selected BOOLEAN DEFAULT FALSE
                 )
@@ -176,50 +179,60 @@ class OraculusBot:
             raise
 
     def load_master_data(self):
-        """Carga los datos maestros para calcular scores"""
+        """Carga los datos maestros con nuevo formato (id, clase_binaria, dataset)"""
         try:
             master_path = self.config["master_data"]["path"]
-            self.master_df = pd.read_csv(
-                master_path, header=None, names=["id", "true_label"]
-            )
+            self.master_df = pd.read_csv(master_path)
+            
+            # Validar columnas requeridas
+            expected_cols = ["id", "clase_binaria", "dataset"]
+            if not all(col in self.master_df.columns for col in expected_cols):
+                raise ValueError(f"El archivo maestro debe tener columnas: {expected_cols}")
 
-            # Split público/privado usando la semilla configurada
-            seed = self.config["master_data"]["seed"]
-            self.public_ids, self.private_ids = train_test_split(
-                self.master_df["id"].values, test_size=0.7, random_state=seed
-            )
+            # Crear conjuntos público y privado
+            public_mask = self.master_df["dataset"] == "public"
+            private_mask = self.master_df["dataset"] == "private"
+            
+            self.public_df = self.master_df[public_mask].copy()
+            self.private_df = self.master_df[private_mask].copy()
+            
+            # Crear conjuntos de IDs para validación
+            self.public_ids = set(self.public_df["id"])
+            self.private_ids = set(self.private_df["id"])
+            self.all_ids = set(self.master_df["id"])
+            
+            # Obtener IDs positivos (clase_binaria = 1) para validar submissions
+            self.positive_ids = set(self.master_df[self.master_df["clase_binaria"] == 1]["id"])
 
-            self.public_set = set(self.public_ids)
-            self.private_set = set(self.private_ids)
-
-            self.logger.info(
-                f"Datos maestros cargados: {len(self.master_df)} registros"
-            )
-            self.logger.info(
-                f"Split - Público: {len(self.public_set)}, Privado: {len(self.private_set)}"
-            )
+            self.logger.info(f"Datos maestros cargados: {len(self.master_df)} registros")
+            self.logger.info(f"Público: {len(self.public_df)}, Privado: {len(self.private_df)}")
+            self.logger.info(f"IDs positivos totales: {len(self.positive_ids)}")
 
         except Exception as e:
             self.logger.error(f"Error cargando datos maestros: {e}")
             raise
 
-    def calculate_scores(self, predictions_df: pd.DataFrame) -> Tuple[Dict, Dict]:
+    def calculate_scores(self, predicted_positive_ids: Set[int]) -> Tuple[Dict, Dict]:
         """Calcula scores público y privado usando matriz de ganancias"""
-        master_dict = dict(zip(self.master_df["id"], self.master_df["true_label"]))
-        pred_dict = dict(zip(predictions_df.iloc[:, 0], predictions_df.iloc[:, 1]))
-
         gain_matrix = self.config["gain_matrix"]
 
-        def calculate_score_for_set(id_set):
-            y_true = [master_dict[id_] for id_ in id_set if id_ in pred_dict]
-            y_pred = [pred_dict[id_] for id_ in id_set if id_ in pred_dict]
-
-            if not y_true:
+        def calculate_score_for_dataset(dataset_df):
+            """Calcula métricas para un dataset específico"""
+            if len(dataset_df) == 0:
                 return {"score": 0, "tp": 0, "tn": 0, "fp": 0, "fn": 0}
-
-            cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+            
+            # Crear vectores de predicción basados en IDs
+            dataset_ids = set(dataset_df["id"])
+            true_labels = dataset_df["clase_binaria"].values
+            
+            # Predecir 1 si el ID está en predicted_positive_ids, 0 si no
+            predicted_labels = [1 if id_ in predicted_positive_ids else 0 for id_ in dataset_df["id"]]
+            
+            # Calcular matriz de confusión
+            cm = confusion_matrix(true_labels, predicted_labels, labels=[0, 1])
             tn, fp, fn, tp = cm.ravel()
 
+            # Calcular score usando matriz de ganancias
             score = (
                 tp * gain_matrix["tp"]
                 + tn * gain_matrix["tn"]
@@ -235,8 +248,8 @@ class OraculusBot:
                 "fn": int(fn),
             }
 
-        public_results = calculate_score_for_set(self.public_set)
-        private_results = calculate_score_for_set(self.private_set)
+        public_results = calculate_score_for_dataset(self.public_df)
+        private_results = calculate_score_for_dataset(self.private_df)
 
         return public_results, private_results
 
@@ -256,7 +269,7 @@ class OraculusBot:
         checksum: str,
         public_results: Dict,
         private_results: Dict,
-        estimulos: int,
+        positives_predicted: int,
         threshold_category: str,
     ):
         """Guarda un envío en la base de datos"""
@@ -268,7 +281,7 @@ class OraculusBot:
             INSERT INTO submissions (
                 user_id, user_email, user_full_name, submission_name,
                 timestamp, file_checksum, file_path, public_score, private_score,
-                tp, tn, fp, fn, estimulos, threshold_category
+                tp, tn, fp, fn, positives_predicted, threshold_category
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
@@ -279,13 +292,13 @@ class OraculusBot:
                 datetime.now(),
                 checksum,
                 file_path,
-                public_results["score"],
-                private_results["score"],
+                float(public_results["score"]),
+                float(private_results["score"]),
                 private_results["tp"],
                 private_results["tn"],
                 private_results["fp"],
                 private_results["fn"],
-                estimulos,
+                positives_predicted,
                 threshold_category,
             ),
         )
@@ -372,181 +385,38 @@ class OraculusBot:
 
         return new_badges
 
-    def process_submit(self, message: Dict, is_teacher: bool = False) -> str:
-        """Procesa comando submit"""
-        user_email = message["sender_email"]
-        submission_name = ""
+    def _extract_file_from_message(self, message: Dict) -> Tuple[Optional[str], Optional[bytes]]:
+        """Extraer archivo adjunto del mensaje de Zulip"""
+        content = message["content"]
+        
+        # Buscar archivos adjuntos en el mensaje
+        # Patrón para enlaces de archivos de Zulip: [filename](url)
+        file_pattern = r"\[([^\]]+\.csv)\]\(([^)]+)\)"
+        matches = re.findall(file_pattern, content, re.IGNORECASE)
 
+        if not matches:
+            return None, None
+
+        filename, file_url = matches[0]
+        
         try:
-            self.logger.info(
-                f"Procesando submit de {user_email} (profesor: {is_teacher})"
-            )
-
-            # Extraer nombre del envío
-            parts = message["content"].strip().split(" ", 1)
-            if len(parts) < 2:
-                return "❌ Formato incorrecto. Uso: `submit <nombre_envio>`"
-
-            submission_name = parts[1].strip()
-            self.logger.info(f"Nombre del envío: {submission_name}")
-
-            # Verificar archivo adjunto
-            if not message.get("attachments"):
-                self.logger.warning(f"No hay archivo adjunto en envío de {user_email}")
-                return "❌ Debes adjuntar un archivo CSV"
-
-            attachment = message["attachments"][0]
-            if not attachment["name"].endswith(".csv"):
-                self.logger.warning(
-                    f"Archivo no CSV enviado por {user_email}: {attachment['name']}"
+            # Si es una URL de Zulip, usar las credenciales del bot
+            if self.config["zulip"]["site"] in file_url:
+                # Usar la API de Zulip para descargar el archivo
+                response = requests.get(
+                    file_url,
+                    auth=(self.config["zulip"]["email"], self.config["zulip"]["api_key"])
                 )
-                return "❌ El archivo debe ser un CSV"
-
-            # Verificar fecha límite (solo para estudiantes)
-            if not is_teacher:
-                deadline = datetime.fromisoformat(
-                    self.config["competition"]["deadline"]
-                )
-                if datetime.now() > deadline:
-                    self.logger.warning(f"Envío fuera de fecha límite de {user_email}")
-                    return "❌ La fecha límite para envíos ha expirado"
-
-            # Descargar y validar archivo
-            self.logger.info(f"Descargando archivo: {attachment['name']}")
-            file_content = self.client.get_file_content(attachment["url"])
-            file_path = self._save_submission_file(
-                message["sender_id"],
-                submission_name,
-                attachment["name"],
-                file_content,
-                is_teacher,
-            )
-
-            # Calcular checksum
-            checksum = hashlib.sha256(file_content).hexdigest()
-            self.logger.info(
-                f"Archivo guardado: {file_path}, checksum: {checksum[:16]}..."
-            )
-
-            # Leer y validar CSV
-            df = pd.read_csv(file_path, header=None)
-            if df.shape[1] != 2:
-                self.logger.warning(
-                    f"CSV con formato incorrecto de {user_email}: {df.shape[1]} columnas"
-                )
-                return "❌ El CSV debe tener exactamente 2 columnas (id, predicción)"
-
-            # Validar IDs
-            submitted_ids = set(df.iloc[:, 0])
-            expected_ids = set(self.master_df["id"])
-
-            if submitted_ids != expected_ids:
-                missing = expected_ids - submitted_ids
-                extra = submitted_ids - expected_ids
-                self.logger.warning(
-                    f"IDs incorrectos en envío de {user_email}: faltan {len(missing)}, sobran {len(extra)}"
-                )
-                msg = "❌ IDs incorrectos en el archivo:\n"
-                if missing:
-                    msg += f"Faltan: {len(missing)} IDs\n"
-                if extra:
-                    msg += f"Sobran: {len(extra)} IDs\n"
-                return msg
-
-            # Validar valores binarios
-            predictions = df.iloc[:, 1]
-            if not all(pred in [0, 1] for pred in predictions):
-                self.logger.warning(
-                    f"Predicciones no binarias en envío de {user_email}"
-                )
-                return "❌ Las predicciones deben ser valores binarios (0 o 1)"
-
-            # Calcular scores
-            self.logger.info(f"Calculando scores para {submission_name}")
-            public_results, private_results = self.calculate_scores(df)
-            threshold_category = self.get_threshold_category(public_results["score"])
-            estimulos = int(predictions.sum())
-
-            self.logger.info(
-                f"Scores calculados - Público: {public_results['score']:.4f}, Privado: {private_results['score']:.4f}"
-            )
-
-            user_info = {
-                "user_id": message["sender_id"],
-                "email": message["sender_email"],
-                "full_name": message["sender_full_name"],
-            }
-
-            if is_teacher:
-                # Para profesores: solo mostrar resultados
-                self.logger.info(f"Envío de profesor completado: {submission_name}")
-                response = f"📊 **Resultados para {submission_name}**\n\n"
-                response += f"🔓 **Público:** {public_results['score']:.4f}\n"
-                response += f"🔒 **Privado:** {private_results['score']:.4f}\n"
-                response += f"🎯 **Categoría:** {threshold_category}\n"
-                response += f"📈 **Estímulos:** {estimulos}\n"
-                return response
             else:
-                # Para estudiantes: guardar y otorgar badges
-                submission_id = self.save_submission(
-                    user_info,
-                    submission_name,
-                    file_path,
-                    checksum,
-                    public_results,
-                    private_results,
-                    estimulos,
-                    threshold_category,
-                )
-
-                self.logger.info(f"Envío guardado con ID: {submission_id}")
-
-                # Contar envíos del usuario
-                conn = self._get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT COUNT(*) FROM submissions WHERE user_id = ?",
-                    (message["sender_id"],),
-                )
-                submission_count = cursor.fetchone()[0]
-                conn.close()
-
-                # Verificar badges
-                new_badges = self.check_and_award_badges(
-                    message["sender_id"], submission_count, public_results["score"]
-                )
-
-                if new_badges:
-                    self.logger.info(
-                        f"Nuevos badges otorgados a {user_email}: {new_badges}"
-                    )
-
-                # Obtener configuración de respuesta por umbral
-                threshold_config = next(
-                    t
-                    for t in self.config["gain_thresholds"]
-                    if t["category"] == threshold_category
-                )
-
-                response = f"🎯 **{threshold_config['message']}** {threshold_config.get('emoji', '')}\n\n"
-                response += f"🆔 **ID Envío:** {submission_id}\n"
-
-                if new_badges:
-                    badge_configs = self.config.get("badges", {})
-                    response += "\n🏆 **Nuevos Badges:**\n"
-                    for badge in new_badges:
-                        badge_info = badge_configs.get(
-                            badge, {"name": badge, "emoji": "🏅"}
-                        )
-                        response += f"{badge_info['emoji']} {badge_info['name']}\n"
-
-                return response
-
+                # URL externa
+                response = requests.get(file_url)
+            
+            response.raise_for_status()
+            return filename, response.content
+            
         except Exception as e:
-            self.logger.error(
-                f"Error procesando envío '{submission_name}' de {user_email}: {e}"
-            )
-            return f"❌ Error procesando envío: {str(e)}"
+            self.logger.error(f"Error descargando archivo desde {file_url}: {e}")
+            return None, None
 
     def _save_submission_file(
         self,
@@ -577,6 +447,150 @@ class OraculusBot:
 
         return str(file_path)
 
+    def process_submit(self, message: Dict, is_teacher: bool = False) -> str:
+        """Procesa comando submit"""
+        user_email = message["sender_email"]
+        submission_name = ""
+
+        try:
+            self.logger.info(f"Procesando submit de {user_email} (profesor: {is_teacher})")
+
+            # Verificar fecha límite (solo para estudiantes)
+            if not is_teacher:
+                deadline = datetime.fromisoformat(self.config["competition"]["deadline"])
+                if datetime.now() > deadline:
+                    self.logger.warning(f"Envío fuera de fecha límite de {user_email}")
+                    return "❌ La fecha límite para envíos ha expirado"
+
+
+            # Extraer nombre del envío
+            parts = message["content"].strip().split(" ", 1)
+            if len(parts) < 2:
+                return "❌ Formato incorrecto. Uso: `submit <nombre_envio>` y adjunta el archivo CSV"
+
+            submission_name = parts[1].split('\n')[0].strip()  # Tomar solo la primera línea
+            self.logger.info(f"Nombre del envío: {submission_name}")
+
+            # Extraer archivo del mensaje
+            filename, file_content = self._extract_file_from_message(message)
+
+            if not file_content:
+                return "❌ Debes adjuntar un archivo CSV. Usa el formato: `submit <nombre>` y adjunta el archivo CSV."
+
+            if not filename.lower().endswith(".csv"):
+                return "❌ El archivo debe ser un CSV"
+
+            # Guardar archivo
+            file_path = self._save_submission_file(
+                message["sender_id"], submission_name, filename, file_content, is_teacher
+            )
+
+            # Calcular checksum
+            checksum = hashlib.sha256(file_content).hexdigest()
+            self.logger.info(f"Archivo guardado: {file_path}, checksum: {checksum[:16]}...")
+
+            # Leer y validar CSV
+            try:
+                df = pd.read_csv(file_path)
+            except Exception as e:
+                return f"❌ Error leyendo el archivo CSV: {str(e)}"
+
+            # Validar que tenga exactamente una columna (IDs)
+            if df.shape[1] != 1:
+                self.logger.warning(f"CSV con formato incorrecto de {user_email}: {df.shape[1]} columnas")
+                return "❌ El CSV debe tener exactamente 1 columna con los IDs predichos como positivos"
+
+            # Obtener IDs predichos como positivos
+            predicted_positive_ids = set(df.iloc[:, 0].astype(int))
+            
+            # Validar que todos los IDs existan en el dataset maestro
+            invalid_ids = predicted_positive_ids - self.all_ids
+            if invalid_ids:
+                self.logger.warning(f"IDs inválidos en envío de {user_email}")
+                return f"❌ IDs inválidos encontrados: {len(invalid_ids)} IDs no existen en el dataset"
+
+            # Calcular scores
+            self.logger.info(f"Calculando scores para {submission_name}")
+            public_results, private_results = self.calculate_scores(predicted_positive_ids)
+            threshold_category = self.get_threshold_category(public_results["score"])
+            positives_predicted = len(predicted_positive_ids)
+
+            self.logger.info(
+                f"Scores calculados - Público: {public_results['score']:.4f}, Privado: {private_results['score']:.4f}"
+            )
+
+            user_info = {
+                "user_id": message["sender_id"],
+                "email": message["sender_email"],
+                "full_name": message["sender_full_name"],
+            }
+
+            if is_teacher:
+                # Para profesores: solo mostrar resultados
+                self.logger.info(f"Envío de profesor completado: {submission_name}")
+                response = f"📊 **Resultados para {submission_name}**\n\n"
+                response += f"📊 **Público:** {public_results['score']:.4f}\n"
+                response += f"🔒 **Privado:** {private_results['score']:.4f}\n"
+                response += f"🎯 **Categoría:** {threshold_category}\n"
+                response += f"📈 **Positivos predichos:** {positives_predicted}\n"
+                response += f"🔢 **Matriz confusión privada:** TP={private_results['tp']}, TN={private_results['tn']}, FP={private_results['fp']}, FN={private_results['fn']}\n"
+                return response
+            else:
+                # Para estudiantes: guardar y otorgar badges
+                submission_id = self.save_submission(
+                    user_info,
+                    submission_name,
+                    file_path,
+                    checksum,
+                    public_results,
+                    private_results,
+                    positives_predicted,
+                    threshold_category,
+                )
+
+                self.logger.info(f"Envío guardado con ID: {submission_id}")
+
+                # Contar envíos del usuario
+                conn = self._get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM submissions WHERE user_id = ?",
+                    (message["sender_id"],),
+                )
+                submission_count = cursor.fetchone()[0]
+                conn.close()
+
+                # Verificar badges
+                new_badges = self.check_and_award_badges(
+                    message["sender_id"], submission_count, public_results["score"]
+                )
+
+                if new_badges:
+                    self.logger.info(f"Nuevos badges otorgados a {user_email}: {new_badges}")
+
+                # Obtener configuración de respuesta por umbral
+                threshold_config = next(
+                    t for t in self.config["gain_thresholds"] if t["category"] == threshold_category
+                )
+
+                response = f"🎯 **{threshold_config['message']}** {threshold_config.get('emoji', '')}\n\n"
+                response += f"🆔 **ID Envío:** {submission_id}\n"
+                response += f"📊 **Score Público:** {public_results['score']:.4f}\n"
+                response += f"📈 **Positivos Predichos:** {positives_predicted}\n"
+
+                if new_badges:
+                    badge_configs = self.config.get("badges", {})
+                    response += "\n🏆 **Nuevos Badges:**\n"
+                    for badge in new_badges:
+                        badge_info = badge_configs.get(badge, {"name": badge, "emoji": "🏅"})
+                        response += f"{badge_info['emoji']} {badge_info['name']}\n"
+
+                return response
+
+        except Exception as e:
+            self.logger.error(f"Error procesando envío '{submission_name}' de {user_email}: {e}")
+            return f"❌ Error procesando envío: {str(e)}"
+
     def process_badges(self, user_id: int) -> str:
         """Lista badges del usuario"""
         conn = self._get_db_connection()
@@ -600,9 +614,7 @@ class OraculusBot:
         badge_configs = self.config.get("badges", {})
 
         for badge_name, earned_at in badges:
-            badge_info = badge_configs.get(
-                badge_name, {"name": badge_name, "emoji": "🏅"}
-            )
+            badge_info = badge_configs.get(badge_name, {"name": badge_name, "emoji": "🏅"})
             date_str = earned_at.strftime("%d/%m/%Y")
             response += f"{badge_info['emoji']} **{badge_info['name']}** - {date_str}\n"
 
@@ -632,7 +644,7 @@ class OraculusBot:
         for sub in submissions:
             selected_mark = "⭐" if sub[5] else ""
             response += f"`{sub[0]}` - **{sub[1]}** {selected_mark}\n"
-            response += f"   📅 {sub[2]} | 📊 {sub[3]:.4f} | 🎯 {sub[4]}\n\n"
+            response += f"   📅 {sub[2]} | 🎯 {sub[4]}\n\n"
 
         return response
 
@@ -740,7 +752,6 @@ class OraculusBot:
         conn = self._get_db_connection()
         cursor = conn.cursor()
 
-        # Query corregida - obtener mejores submissions por usuario
         cursor.execute(
             """
             WITH user_stats AS (
@@ -760,26 +771,14 @@ class OraculusBot:
                     *,
                     COALESCE(selected_private_score, best_private_score) as final_score
                 FROM user_stats
-            ),
-            best_submissions AS (
-                SELECT
-                    fs.*,
-                    (SELECT s.user_id
-                     FROM submissions s
-                     WHERE s.user_id = fs.user_id
-                       AND s.private_score = fs.best_private_score
-                     ORDER BY s.timestamp DESC
-                     LIMIT 1) as best_submission_id
-                FROM final_scores fs
             )
             SELECT
                 user_full_name,
                 final_score,
                 total_submissions,
                 best_public_score,
-                best_private_score,
-                best_submission_id
-            FROM best_submissions
+                best_private_score
+            FROM final_scores
             ORDER BY final_score DESC
         """
         )
@@ -790,21 +789,12 @@ class OraculusBot:
         if not results:
             return "📊 No hay submissions en el leaderboard"
 
-        response = (
-            f"🏆 **Leaderboard Completo - {self.config['competition']['name']}**\n\n"
-        )
-        response += "| Pos | Nombre | Score Final | Envíos | Mejor Público | Mejor Privado | Mejor ID |\n"
-        response += "|---|---|---|---|---|---|---|\n"
+        response = f"🏆 **Leaderboard Completo - {self.config['competition']['name']}**\n\n"
+        response += "| Pos | Nombre | Score Final | Envíos | Mejor Público | Mejor Privado |\n"
+        response += "|---|---|---|---|---|---|\n"
 
-        for i, (
-            name,
-            final_score,
-            count,
-            best_public,
-            best_private,
-            best_id,
-        ) in enumerate(results, 1):
-            response += f"| {i} | {name} | {final_score:.4f} | {count} | {best_public:.4f} | {best_private:.4f} | {best_id} |\n"
+        for i, (name, final_score, count, best_public, best_private) in enumerate(results, 1):
+            response += f"| {i} | {name} | {final_score:.4f} | {count} | {best_public:.4f} | {best_private:.4f} |\n"
 
         return response
 
@@ -813,7 +803,6 @@ class OraculusBot:
         conn = self._get_db_connection()
         cursor = conn.cursor()
 
-        # Query corregida - obtener mejores scores públicos
         cursor.execute(
             """
             WITH real_submissions AS (
@@ -846,9 +835,7 @@ class OraculusBot:
         if not results:
             return "📊 No hay submissions en el leaderboard público"
 
-        response = (
-            f"🌟 **Leaderboard Público - {self.config['competition']['name']}**\n\n"
-        )
+        response = f"🌟 **Leaderboard Público - {self.config['competition']['name']}**\n\n"
         response += "| Pos | Nombre | Score | Categoría |\n"
         response += "|---|---|---|---|\n"
 
@@ -892,9 +879,7 @@ class OraculusBot:
                 )
                 conn.commit()
                 conn.close()
-                return (
-                    f"✅ Fake submission agregado: {name} con score {public_score:.4f}"
-                )
+                return f"✅ Fake submission agregado: {name} con score {public_score:.4f}"
             except sqlite3.IntegrityError:
                 conn.close()
                 return "❌ Ya existe un fake submission con ese nombre"
@@ -953,7 +938,7 @@ class OraculusBot:
 • `select <id>` - Seleccionar modelo para leaderboard
 • `help` - Mostrar esta ayuda
 
-**Formato CSV:** 2 columnas sin encabezado (id, predicción_binaria)"""
+**Formato CSV:** 1 columna con los IDs que predices como positivos (sin encabezado)"""
 
     def is_teacher(self, email: str) -> bool:
         """Verifica si un usuario es profesor"""
@@ -998,9 +983,7 @@ class OraculusBot:
                 self.logger.info(f"Comando leaderboard full de profesor {sender_email}")
                 response = self.process_leaderboard_full()
             elif content == "leaderboard public" and is_teacher:
-                self.logger.info(
-                    f"Comando leaderboard public de profesor {sender_email}"
-                )
+                self.logger.info(f"Comando leaderboard public de profesor {sender_email}")
                 response = self.process_leaderboard_public()
             elif content.startswith("fake_submit ") and is_teacher:
                 self.logger.info(f"Comando fake_submit de profesor {sender_email}")
@@ -1021,18 +1004,14 @@ class OraculusBot:
 
         except Exception as e:
             self.logger.error(f"Error manejando mensaje de {sender_email}: {e}")
-            error_response = (
-                "❌ Error interno del bot. El administrador ha sido notificado."
-            )
+            error_response = "❌ Error interno del bot. El administrador ha sido notificado."
             self.client.send_message(
                 {"type": "private", "to": sender_email, "content": error_response}
             )
 
     def run(self):
         """Ejecuta el bot"""
-        self.logger.info(
-            f"OraculusBot iniciado para la competencia: {self.config['competition']['name']}"
-        )
+        self.logger.info(f"OraculusBot iniciado para la competencia: {self.config['competition']['name']}")
         self.logger.info(f"Fecha límite: {self.config['competition']['deadline']}")
         self.logger.info(f"Profesores configurados: {len(self.config['teachers'])}")
         self.logger.info("Escuchando mensajes privados...")
@@ -1057,7 +1036,7 @@ def create_config_template():
         },
         "database": {"path": "oraculus.db"},
         "teachers": ["teacher1@example.com", "teacher2@example.com"],
-        "master_data": {"path": "master_data.csv", "seed": 42},
+        "master_data": {"path": "master_data.csv"},
         "submissions": {"path": "./submissions"},
         "gain_matrix": {"tp": 1.0, "tn": 0.5, "fp": -0.1, "fn": -0.5},
         "gain_thresholds": [
@@ -1109,7 +1088,7 @@ def main():
         description="OraculusBot - Bot de Zulip para competencias ML"
     )
     parser.add_argument(
-        "--config", "-c", default="config.json", help="Archivo de configuración"
+        "--config", "-c", help="Archivo de configuración"
     )
     parser.add_argument(
         "--create-config",
@@ -1119,19 +1098,17 @@ def main():
 
     args = parser.parse_args()
 
-    # Configurar logging básico para main
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
-
     if args.create_config:
         create_config_template()
         return
 
-    if not os.path.exists(args.config):
-        logging.error(f"Archivo de configuración no encontrado: {args.config}")
-        logging.info("Usa --create-config para generar un ejemplo")
+    if not args.config or not os.path.exists(args.config):
+        parser.print_help()
         return
 
     try:
+        # Configurar logging básico para main
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
         bot = OraculusBot(args.config)
         bot.run()
     except KeyboardInterrupt:

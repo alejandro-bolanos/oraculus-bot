@@ -212,3 +212,4 @@ config.json
 *.csv
 .DS_Store
 .vscode/settings.json
+manual-tests/
