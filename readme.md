@@ -278,16 +278,6 @@ oraculus-bot/
 └── submissions/            # Archivos de envíos
 ```
 
-## 🐳 Docker
-
-```bash
-# Construir imagen
-make docker-build
-
-# Ejecutar con volúmenes
-make docker-run
-```
-
 ## 📜 Licencia
 
 MIT License - ver archivo [LICENSE](LICENSE) para detalles.

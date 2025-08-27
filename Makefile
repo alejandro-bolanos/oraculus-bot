@@ -22,7 +22,7 @@ test: ## Ejecutar todos los tests
 	$(PYTEST) -v --tb=short
 
 test-unit: ## Ejecutar solo tests unitarios
-	$(PYTEST) test_oraculus_bot.py -v
+	$(PYTEST) tests/unit/test_oraculus_bot.py -v
 
 test-integration: ## Ejecutar solo tests de integración
 	$(PYTEST) test_integration.py -v
@@ -40,21 +40,22 @@ test-watch: ## Ejecutar tests en modo watch (requiere pytest-watch)
 
 lint: ## Verificar calidad de código con Ruff
 	$(RUFF) check oraculus_bot.py test_*.py
-	uv run mypy oraculus_bot.py --ignore-missing-imports
+	uv run mypy src/oraculus_bot.py --ignore-missing-imports
 
 format: ## Formatear código con Ruff
-	$(RUFF) format oraculus_bot.py test_*.py
+	$(RUFF) format src/oraculus_bot.py test_*.py
 
 format-check: ## Verificar formato sin modificar archivos
-	$(RUFF) format --check oraculus_bot.py test_*.py
+	$(RUFF) format --check src/oraculus_bot.py test_*.py
 
 lint-fix: ## Corregir automáticamente problemas de linting
-	$(RUFF) check --fix oraculus_bot.py test_*.py
+	$(RUFF) check --fix src/oraculus_bot.py test_*.py
 
 clean: ## Limpiar archivos temporales
 	rm -rf .pytest_cache/
 	rm -rf htmlcov/
 	rm -rf __pycache__/
+	rm -rf .mypy_cache/
 	rm -rf *.pyc
 	rm -rf .coverage
 	find . -type d -name __pycache__ -delete
@@ -62,10 +63,10 @@ clean: ## Limpiar archivos temporales
 	rm -rf .ruff_cache/
 
 run: ## Ejecutar el bot
-	$(PYTHON) oraculus_bot.py
+	$(PYTHON) src/oraculus_bot.py
 
 run-config: ## Crear configuración de ejemplo
-	$(PYTHON) oraculus_bot.py --create-config
+	$(PYTHON) src/oraculus_bot.py --create-config
 
 demo-data: ## Crear datos de demostración
 	@echo "Creando datos maestros de demostración..."
@@ -81,21 +82,6 @@ check-fix: ## Verificación completa con corrección automática
 	make format
 	make lint-fix
 	make test
-
-docker-build: ## Construir imagen Docker
-	docker build -t oraculus-bot .
-
-docker-run: ## Ejecutar en Docker
-	docker run -it --rm -v $(PWD)/config.json:/app/config.json -v $(PWD)/master_data.csv:/app/master_data.csv oraculus-bot
-
-benchmark: ## Benchmark de rendimiento
-	@echo "Ejecutando benchmarks..."
-	$(PYTEST) test_integration.py::TestPerformanceAndScalability -v --durations=10
-
-docs: ## Generar documentación
-	@echo "Generando documentación..."
-	$(PYTHON) -c "from oraculus_bot import OraculusBot; help(OraculusBot)" > docs.txt
-	@echo "Documentación generada en docs.txt"
 
 # Targets de desarrollo
 dev-install: setup-dev ## Instalación completa para desarrollo
