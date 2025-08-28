@@ -61,7 +61,7 @@ class OraculusBot:
     def _setup_logging(self):
         """Configura el sistema de logging"""
         # Crear directorio de logs si no existe
-        log_dir = Path("logs")
+        log_dir = Path(self.config["logs"]["path"])
         log_dir.mkdir(exist_ok=True)
 
         # Configurar formato de log
@@ -1037,6 +1037,7 @@ def create_config_template():
             "site": "https://your-org.zulipchat.com",
         },
         "database": {"path": "oraculus.db"},
+        "logs": {"path": "logs"},
         "teachers": ["teacher1@example.com", "teacher2@example.com"],
         "master_data": {"path": "master_data.csv"},
         "submissions": {"path": "./submissions"},

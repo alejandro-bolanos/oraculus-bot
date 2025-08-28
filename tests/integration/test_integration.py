@@ -41,6 +41,7 @@ def integration_setup():
             "database": {"path": str(temp_dir / "competition.db")},
             "teachers": ["prof1@uni.edu", "prof2@uni.edu"],
             "master_data": {"path": str(master_path)},
+            "logs": {"path": str(temp_dir / "logs")},
             "submissions": {"path": str(temp_dir / "submissions")},
             "gain_matrix": {"tp": 100, "tn": 10, "fp": -50, "fn": -100},
             "gain_thresholds": [

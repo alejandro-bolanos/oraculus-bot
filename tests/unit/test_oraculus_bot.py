@@ -59,6 +59,7 @@ def sample_config(temp_dir, sample_master_data):
         "teachers": ["teacher@test.com"],
         "master_data": {"path": str(sample_master_data)},
         "submissions": {"path": str(temp_dir / "submissions")},
+        "logs": {"path": str(temp_dir / "logs")},
         "gain_matrix": {"tp": 10, "tn": 1, "fp": -5, "fn": -10},
         "gain_thresholds": [
             {"min_score": 20, "category": "excellent", "message": "¡Excelente!", "emoji": "🏆"},
@@ -479,6 +480,7 @@ class TestEdgeCases:
             "master_data": {"path": str(bad_path)},
             "teachers": [],
             "submissions": {"path": str(temp_dir)},
+            "logs": {"path": str(temp_dir / "logs")},
             "gain_matrix": {"tp": 1, "tn": 1, "fp": -1, "fn": -1},
             "gain_thresholds": [
                 {"min_score": 0, "category": "basic", "message": "OK", "emoji": "👍"}
