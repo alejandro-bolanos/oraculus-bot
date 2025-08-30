@@ -207,9 +207,9 @@ marimo/_lsp/
 __marimo__/
 
 # Oraculus
-config.json
 *.db
 *.csv
 .DS_Store
 .vscode/settings.json
-manual-tests/
+config.json
+*.config.json

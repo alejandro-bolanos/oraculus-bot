@@ -25,10 +25,10 @@ test-unit: ## Ejecutar solo tests unitarios
 	$(PYTEST) tests/unit/test_oraculus_bot.py -v
 
 test-integration: ## Ejecutar solo tests de integración
-	$(PYTEST) test_integration.py -v
+	$(PYTEST) tests/integration/test_integration.py -v
 
 test-fast: ## Tests rápidos (unitarios solamente)
-	$(PYTEST) test_oraculus_bot.py -x -v
+	$(PYTEST) tests/unit/test_oraculus_bot.py -x -v
 
 test-coverage: ## Tests con reporte de cobertura
 	$(PYTEST) --cov=oraculus_bot --cov-report=html --cov-report=term
@@ -39,8 +39,8 @@ test-watch: ## Ejecutar tests en modo watch (requiere pytest-watch)
 	uv run ptw --runner "pytest -v"
 
 lint: ## Verificar calidad de código con Ruff
-	$(RUFF) check oraculus_bot.py test_*.py
-	uv run mypy src/oraculus_bot.py --ignore-missing-imports
+	$(RUFF) check .
+	uv run mypy src/oraculus_bot/oraculus_bot.py --ignore-missing-imports
 
 format: ## Formatear código con Ruff
 	$(RUFF) format src/oraculus_bot.py test_*.py
@@ -49,7 +49,7 @@ format-check: ## Verificar formato sin modificar archivos
 	$(RUFF) format --check src/oraculus_bot.py test_*.py
 
 lint-fix: ## Corregir automáticamente problemas de linting
-	$(RUFF) check --fix src/oraculus_bot.py test_*.py
+	$(RUFF) check --fix .
 
 clean: ## Limpiar archivos temporales
 	rm -rf .pytest_cache/
