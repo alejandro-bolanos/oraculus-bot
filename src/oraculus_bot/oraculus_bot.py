@@ -647,7 +647,7 @@ class OraculusBot:
         response += "|---|---|---|---|---|\n"
         for sub in submissions:
             selected_mark = "⭐" if sub[5] else ""
-            response += f"|{selected_mark}|{sub[0]}|{sub[1]}| {sub[2]}|{sub[4]}|"
+            response += f"|{selected_mark}|{sub[0]}|{sub[1]}| {sub[2]}|{sub[4]}|\n"
 
         return response
 
