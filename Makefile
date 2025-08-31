@@ -3,9 +3,10 @@
 .PHONY: help install test test-unit test-integration test-fast test-coverage clean lint format check setup-dev
 
 # Variables
-PYTHON := uv run python
-PYTEST := uv run pytest
-RUFF := uv run ruff
+UV_RUN := uv run
+PYTHON := $(UV_RUN) python
+PYTEST := $(UV_RUN) pytest
+RUFF := $(UV_RUN) ruff
 
 help: ## Mostrar ayuda
 	@echo "Comandos disponibles:"
@@ -61,12 +62,6 @@ clean: ## Limpiar archivos temporales
 	find . -type d -name __pycache__ -delete
 	find . -type f -name "*.pyc" -delete
 	rm -rf .ruff_cache/
-
-run: ## Ejecutar el bot
-	$(PYTHON) src/oraculus_bot.py
-
-run-config: ## Crear configuración de ejemplo
-	$(PYTHON) src/oraculus_bot.py --create-config
 
 demo-data: ## Crear datos de demostración
 	@echo "Creando datos maestros de demostración..."

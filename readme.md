@@ -1,5 +1,7 @@
 # OraculusBot 🤖
 
+<img src="logo.png" alt="oraculus" width="200"/>
+
 Bot de Zulip para competencias de machine learning tipo Kaggle con nuevo formato de datos.
 
 ## ✨ Características
@@ -11,10 +13,9 @@ Bot de Zulip para competencias de machine learning tipo Kaggle con nuevo formato
 - 🏆 Sistema de badges y recompensas gamificado
 - 👥 Roles diferenciados (estudiantes vs profesores)
 - 📈 Leaderboards público y privado con fake submissions
-- 🔒 Split automático público/privado desde datos maestros
 - 📁 Gestión de archivos y detección de duplicados
 - ⏰ Control de fechas límite
-- 🧪 **Suite completa de tests** unitarios y de integración
+- 🧪 **Suite completa de tests** unitarios, integración y end 2 end
 
 ## 🚀 Instalación
 
@@ -34,8 +35,6 @@ uv sync
 ```bash
 # Generar archivo de configuración de ejemplo
 uv run oraculus_bot.py --create-config
-# o usando make
-make run-config
 ```
 
 ### 2. Preparar datos maestros
@@ -80,9 +79,8 @@ Edita `config.json` con tus credenciales de Zulip:
 
 ```bash
 # Ejecutar el bot
-uv run oraculus_bot.py --config mi_config.json
-# o
-make run
+uv run oraculus --config mi_config.json
+
 ```
 
 ## 📝 Comandos

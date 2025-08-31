@@ -14,11 +14,8 @@ dependencies = [
     "scikit-learn>=1.0.0",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/oraculus_bot"]
-
-# [project.scripts]
-# oraculus-bot = "src/oraculus_bot:main"
+[project.scripts]
+oraculus = "oraculus_bot.oraculus_bot:main"
 
 [build-system]
 requires = ["hatchling"]
