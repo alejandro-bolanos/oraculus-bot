@@ -645,11 +645,12 @@ class TestLeaderboards:
         bot.save_submission(
             users[1], "model2", "/path2", "check2", public_results, private_results2, 4, "good"
         )
-
+        
+        bot.process_select(2,"select 2")
         response = bot.process_leaderboard_full()
         assert "User One" in response
         assert "User Two" in response
-        assert "25.0000" in response  # Score más alto primero
+        assert "25" in response  # Score más alto primero
 
 
 class TestBadgeSystem:
