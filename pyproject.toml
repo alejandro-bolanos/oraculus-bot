@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-oraculus-bot = "oraculus_bot:main"
+oraculus = "oraculus_bot.oraculus_bot:main"
 
 [build-system]
 requires = ["hatchling"]

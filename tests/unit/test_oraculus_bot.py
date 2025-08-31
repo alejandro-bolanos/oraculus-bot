@@ -59,6 +59,7 @@ def sample_config(temp_dir, sample_master_data):
         "teachers": ["teacher@test.com"],
         "master_data": {"path": str(sample_master_data)},
         "submissions": {"path": str(temp_dir / "submissions")},
+        "logs": {"path": str(temp_dir / "logs")},
         "gain_matrix": {"tp": 10, "tn": 1, "fp": -5, "fn": -10},
         "gain_thresholds": [
             {"min_score": 20, "category": "excellent", "message": "¡Excelente!", "emoji": "🏆"},
@@ -86,11 +87,10 @@ def sample_config(temp_dir, sample_master_data):
 @pytest.fixture
 def bot(sample_config):
     """Bot de prueba"""
-    with patch("oraculus_bot.zulip.Client") as mock_client:
+    with patch("oraculus_bot.oraculus_bot.zulip.Client")as mock_client:
         mock_client.return_value = Mock()
         bot = OraculusBot(str(sample_config))
         return bot
-
 
 class TestOraculusBot:
     """Tests para la clase OraculusBot"""
@@ -269,7 +269,7 @@ class TestOraculusBot:
 
         response = bot.process_list_submits(user_id)
         assert "test_model" in response
-        assert "15.0000" in response
+        assert "good" in response
 
     def test_process_fake_submit(self, bot):
         """Test comando fake_submit"""
@@ -329,7 +329,7 @@ class TestOraculusBot:
         assert "duplicates" in help_msg
         assert "fake_submit" in help_msg
 
-    @patch("oraculus_bot.requests.get")
+    @patch("oraculus_bot.oraculus_bot.requests.get")
     def test_extract_file_from_message(self, mock_get, bot):
         """Test extracción de archivos de mensajes"""
         # Mock response
@@ -352,7 +352,7 @@ class TestOraculusBot:
         assert filename is None
         assert content is None
 
-    @patch("oraculus_bot.requests.get")
+    @patch("oraculus_bot.oraculus_bot.requests.get")
     def test_process_submit_success(self, mock_get, bot, temp_dir):
         """Test proceso de submit exitoso"""
         # Mock de descarga de archivo
@@ -480,6 +480,7 @@ class TestEdgeCases:
             "master_data": {"path": str(bad_path)},
             "teachers": [],
             "submissions": {"path": str(temp_dir)},
+            "logs": {"path": str(temp_dir / "logs")},
             "gain_matrix": {"tp": 1, "tn": 1, "fp": -1, "fn": -1},
             "gain_thresholds": [
                 {"min_score": 0, "category": "basic", "message": "OK", "emoji": "👍"}
@@ -496,7 +497,7 @@ class TestEdgeCases:
         with open(config_path, "w") as f:
             json.dump(config, f)
 
-        with patch("oraculus_bot.zulip.Client"), pytest.raises(ValueError, match="debe tener columnas"):
+        with patch("oraculus_bot.oraculus_bot.zulip.Client"), pytest.raises(ValueError, match="debe tener columnas"):
                 OraculusBot(str(config_path))
 
 
@@ -567,7 +568,7 @@ class TestMessageHandling:
 class TestSubmissionValidation:
     """Tests para validación de envíos"""
 
-    @patch("oraculus_bot.requests.get")
+    @patch("oraculus_bot.oraculus_bot.requests.get")
     def test_submit_csv_with_multiple_columns(self, mock_get, bot):
         """Test CSV con múltiples columnas (inválido)"""
         mock_response = Mock()
@@ -585,7 +586,7 @@ class TestSubmissionValidation:
         response = bot.process_submit(message)
         assert "exactamente 1 columna" in response
 
-    @patch("oraculus_bot.requests.get")
+    @patch("oraculus_bot.oraculus_bot.requests.get")
     def test_submit_non_csv_file(self, mock_get, bot):
         """Test archivo que no es CSV"""
         mock_response = Mock()
@@ -684,7 +685,7 @@ class TestBadgeSystem:
         badges2 = bot.check_and_award_badges(user_id, 2, 15.0)
         assert "first_submission" not in badges2
 
-    @patch("oraculus_bot.requests.get")
+    @patch("oraculus_bot.oraculus_bot.requests.get")
     def test_process_submit_teacher(self, mock_get, bot):
         """Test proceso de submit para profesor"""
         mock_response = Mock()
@@ -713,7 +714,7 @@ class TestBadgeSystem:
         response = bot.process_submit(message)
         assert "Formato incorrecto" in response
 
-    @patch("oraculus_bot.requests.get")
+    @patch("oraculus_bot.oraculus_bot.requests.get")
     def test_process_submit_invalid_ids(self, mock_get, bot):
         """Test submit con IDs inválidos"""
         mock_response = Mock()

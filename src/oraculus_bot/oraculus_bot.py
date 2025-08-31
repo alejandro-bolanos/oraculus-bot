@@ -61,7 +61,7 @@ class OraculusBot:
     def _setup_logging(self):
         """Configura el sistema de logging"""
         # Crear directorio de logs si no existe
-        log_dir = Path("logs")
+        log_dir = Path(self.config["logs"]["path"])
         log_dir.mkdir(exist_ok=True)
 
         # Configurar formato de log
@@ -397,10 +397,10 @@ class OraculusBot:
 
         try:
             # Si es una URL de Zulip, usar las credenciales del bot
-            if self.config["zulip"]["site"] in file_url:
+            if  not file_url.startswith("http"):
                 # Usar la API de Zulip para descargar el archivo
                 response = requests.get(
-                    file_url, auth=(self.config["zulip"]["email"], self.config["zulip"]["api_key"])
+                    self.config["zulip"]["site"] + file_url, auth=(self.config["zulip"]["email"], self.config["zulip"]["api_key"])
                 )
             else:
                 # URL externa
@@ -577,8 +577,6 @@ class OraculusBot:
                     f"🎯 **{threshold_config['message']}** {threshold_config.get('emoji', '')}\n\n"
                 )
                 response += f"🆔 **ID Envío:** {submission_id}\n"
-                response += f"📊 **Score Público:** {public_results['score']:.4f}\n"
-                response += f"📈 **Positivos Predichos:** {positives_predicted}\n"
 
                 if new_badges:
                     badge_configs = self.config.get("badges", {})
@@ -643,10 +641,13 @@ class OraculusBot:
             return "📋 No tienes envíos registrados"
 
         response = "📋 **Tus Envíos:**\n\n"
+
+        response = "📋 **Tus Envíos:**\n\n"
+        response += "| selected | id | Nombre | 📅 | 🎯 |\n"
+        response += "|---|---|---|---|---|\n"
         for sub in submissions:
             selected_mark = "⭐" if sub[5] else ""
-            response += f"`{sub[0]}` - **{sub[1]}** {selected_mark}\n"
-            response += f"   📅 {sub[2]} | 🎯 {sub[4]}\n\n"
+            response += f"|{selected_mark}|{sub[0]}|{sub[1]}| {sub[2]}|{sub[4]}|"
 
         return response
 
@@ -763,20 +764,21 @@ class OraculusBot:
                     user_email,
                     COUNT(*) as total_submissions,
                     MAX(CASE WHEN is_selected = 1 THEN private_score END) as selected_private_score,
-                    MAX(private_score) as best_private_score,
+                    MAX(is_selected) as selected,
+					MAX(private_score) as best_private_score,
                     MAX(public_score) as best_public_score
                 FROM submissions
                 GROUP BY user_id, user_full_name, user_email
             ),
             final_scores AS (
                 SELECT
-                    *,
-                    COALESCE(selected_private_score, best_private_score) as final_score
+                    *
                 FROM user_stats
             )
             SELECT
                 user_full_name,
-                final_score,
+                selected_private_score as final_score,
+				selected,
                 total_submissions,
                 best_public_score,
                 best_private_score
@@ -792,11 +794,11 @@ class OraculusBot:
             return "📊 No hay submissions en el leaderboard"
 
         response = f"🏆 **Leaderboard Completo - {self.config['competition']['name']}**\n\n"
-        response += "| Pos | Nombre | Score Final | Envíos | Mejor Público | Mejor Privado |\n"
-        response += "|---|---|---|---|---|---|\n"
+        response += "| Pos | Nombre | Score Final | Eligió | Envíos | Mejor Público | Mejor Privado |\n"
+        response += "|---|---|---|---|---|---|---|\n"
 
-        for i, (name, final_score, count, best_public, best_private) in enumerate(results, 1):
-            response += f"| {i} | {name} | {final_score:.4f} | {count} | {best_public:.4f} | {best_private:.4f} |\n"
+        for i, (name, final_score, selected, count, best_public, best_private) in enumerate(results, 1):
+            response += f"| {i} | {name} | {final_score} | {selected} | {count} | {best_public} | {best_private} |\n"
 
         return response
 
@@ -1037,6 +1039,7 @@ def create_config_template():
             "site": "https://your-org.zulipchat.com",
         },
         "database": {"path": "oraculus.db"},
+        "logs": {"path": "logs"},
         "teachers": ["teacher1@example.com", "teacher2@example.com"],
         "master_data": {"path": "master_data.csv"},
         "submissions": {"path": "./submissions"},

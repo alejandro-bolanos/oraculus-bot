@@ -5,7 +5,6 @@ Configuración global para pytest
 
 import logging
 import shutil
-import tempfile
 from pathlib import Path
 
 import pytest
